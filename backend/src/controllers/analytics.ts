@@ -53,29 +53,29 @@ export const analyticsController = {
         }),
       ]);
 
-      const categoryIds = categoryBreakdown.map(c => c.categoryId).filter(Boolean) as string[];
+      const categoryIds = categoryBreakdown.map((c: { categoryId: string | null }) => c.categoryId).filter(Boolean) as string[];
       const categories  = await prisma.category.findMany({ where: { id: { in: categoryIds } } });
-      const catMap      = Object.fromEntries(categories.map(c => [c.id, c]));
+      const catMap      = Object.fromEntries(categories.map((c: { id: string }) => [c.id, c]));
 
-      const sourceIds = sourceBreakdown.map(s => s.sourceId).filter(Boolean) as string[];
+      const sourceIds = sourceBreakdown.map((s: { sourceId: string | null }) => s.sourceId).filter(Boolean) as string[];
       const sources   = await prisma.paymentSource.findMany({ where: { id: { in: sourceIds } } });
-      const srcMap    = Object.fromEntries(sources.map(s => [s.id, s]));
+      const srcMap    = Object.fromEntries(sources.map((s: { id: string }) => [s.id, s]));
 
-      const enrichedCats = categoryBreakdown.map(c => ({
+      const enrichedCats = categoryBreakdown.map((c: { categoryId: string | null; _sum: { amount: unknown }; _count: unknown }) => ({
         category:  c.categoryId ? catMap[c.categoryId] : null,
         total:     Number(c._sum.amount || 0),
         count:     c._count,
       }));
 
-      const enrichedSrcs = sourceBreakdown.map(s => ({
+      const enrichedSrcs = sourceBreakdown.map((s: { sourceId: string | null; _sum: { amount: unknown }; _count: unknown }) => ({
         source: s.sourceId ? srcMap[s.sourceId] : null,
         total:  Number(s._sum.amount || 0),
         count:  s._count,
       }));
 
-      const budgetSummary = activeBudgets.map(b => ({
+      const budgetSummary = activeBudgets.map((b: typeof activeBudgets[number]) => ({
         ...b,
-        usedAmount: b.expenses.reduce((s, e) => s + Number(e.amount), 0),
+        usedAmount: b.expenses.reduce((s: number, e: { amount: unknown }) => s + Number(e.amount), 0),
         expenses:   undefined,
       }));
 

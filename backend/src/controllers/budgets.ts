@@ -27,9 +27,9 @@ export const budgetController = {
         },
       });
 
-      const enriched = budgets.map(b => ({
+      const enriched = budgets.map((b: typeof budgets[number]) => ({
         ...b,
-        usedAmount: b.expenses.reduce((s, e) => s + Number(e.amount), 0),
+        usedAmount: b.expenses.reduce((s: number, e: { amount: unknown }) => s + Number(e.amount), 0),
         expenses: undefined,
       }));
 
