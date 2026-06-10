@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  icon      String?
+  color     String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt      @map("updated_at")
+  expenses  Expense[]
+
+  @@map("categories")
+}
+
+model PaymentSource {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  type      String?
+  icon      String?
+  color     String?
+  balance   Decimal?  @db.Decimal(15, 2)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt      @map("updated_at")
+  expenses  Expense[]
+
+  @@map("payment_sources")
+}
+
+model Budget {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  amount      Decimal   @db.Decimal(15, 2)
+  startDate   DateTime  @map("start_date") @db.Date
+  endDate     DateTime  @map("end_date")   @db.Date
+  color       String?
+  status      String    @default("active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt      @map("updated_at")
+  expenses    Expense[]
+
+  @@map("budgets")
+}
+
+model Expense {
+  id         String        @id @default(uuid())
+  title      String
+  amount     Decimal       @db.Decimal(15, 2)
+  date       DateTime      @db.Date
+  notes      String?
+  tags       String[]      @default([])
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt      @map("updated_at")
+
+  categoryId String?        @map("category_id")
+  category   Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  budgetId   String?        @map("budget_id")
+  budget     Budget?        @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+
+  sourceId   String?        @map("source_id")
+  source     PaymentSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([date])
+  @@index([categoryId])
+  @@index([budgetId])
+  @@index([sourceId])
+  @@map("expenses")
+}
