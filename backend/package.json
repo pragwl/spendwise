@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev":        "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build":      "tsc",
+    "build":      "prisma generate && tsc",
     "start":      "node dist/server.js",
     "db:migrate": "prisma migrate deploy",
     "db:seed":    "ts-node prisma/seed.ts",
