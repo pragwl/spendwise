@@ -233,6 +233,18 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
               </div>
               <Progress pct={p} tone={hh.tone} h={8} />
               <p style={{ fontSize:11, color:T.faint, marginTop:6 }}>{Math.round(p)}% used</p>
+              {(Number(b.cashSpent||0) > 0 || Number(b.walletSpent||0) > 0) && (
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7, marginTop:10 }}>
+                  <div style={{ borderRadius:10, background:T.raised, padding:"8px 10px" }}>
+                    <p style={{ fontSize:10, color:T.muted, marginBottom:3 }}>💵 Cash</p>
+                    <p style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(b.cashSpent||0))}</p>
+                  </div>
+                  <div style={{ borderRadius:10, background:T.raised, padding:"8px 10px" }}>
+                    <p style={{ fontSize:10, color:T.muted, marginBottom:3 }}>👛 Wallet</p>
+                    <p style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(b.walletSpent||0))}</p>
+                  </div>
+                </div>
+              )}
             </Card>
           );
         })}
@@ -660,7 +672,8 @@ function CategoriesScreen() {
 // ── SOURCES SCREEN ────────────────────────────────────────────────────────
 const SRC_COLORS = ["#C2623F","#E8A838","#2E9E6B","#9B6DBF","#5B8FD4","#3BAF7E","#E07B5A","#9E9389"];
 type SrcForm = { name:string; type:string; icon:string; color:string; balance:string };
-const blankSrc: SrcForm = { name:"", type:"", icon:"💳", color:"#5B8FD4", balance:"" };
+const blankSrc: SrcForm = { name:"", type:"Cash", icon:"💵", color:"#5B8FD4", balance:"" };
+const SRC_TYPES = [{ value:"Cash", label:"💵 Cash" }, { value:"Wallet", label:"👛 Wallet" }];
 
 function SourcesScreen() {
   const { sources, srcsLoading, createSource, updateSource, deleteSource } = useData();
@@ -672,8 +685,8 @@ function SourcesScreen() {
   useEffect(()=>{
     if (modal.open) setForm(modal.source ? {
       name:    modal.source.name,
-      type:    modal.source.type    || "",
-      icon:    modal.source.icon    || "💳",
+      type:    modal.source.type === "Cash" || modal.source.type === "Wallet" ? modal.source.type : "Cash",
+      icon:    modal.source.icon    || "💵",
       color:   modal.source.color   || "#5B8FD4",
       balance: modal.source.balance != null ? String(Number(modal.source.balance)) : "",
     } : blankSrc);
@@ -734,9 +747,11 @@ function SourcesScreen() {
         <Btn onClick={save} full disabled={saving}>{saving?"Saving…":isEdit?"Save changes":"Create"}</Btn>
       </div>}>
       <div style={{ display:"flex", flexDirection:"column", gap:13 }}>
-        <Inp label="Name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. ICICI Credit Card" />
-        <Inp label="Type" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))} placeholder="Credit Card, UPI, Wallet…" />
-        <Inp label="Icon (emoji)" value={form.icon} onChange={e=>setForm(f=>({...f,icon:e.target.value}))} placeholder="💳" />
+        <Inp label="Name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. PhonePe Wallet" />
+        <Sel label="Type" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+          {SRC_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}
+        </Sel>
+        <Inp label="Icon (emoji)" value={form.icon} onChange={e=>setForm(f=>({...f,icon:e.target.value}))} placeholder="💵" />
         <Inp label="Balance (₹, optional)" type="number" value={form.balance} onChange={e=>setForm(f=>({...f,balance:e.target.value}))} placeholder="Leave blank if unknown" />
         <div>
           <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", display:"block", marginBottom:8 }}>Color</span>

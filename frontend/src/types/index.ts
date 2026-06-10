@@ -24,6 +24,8 @@ export interface Budget {
   description?: string;
   amount:       number;
   usedAmount?:  number;
+  cashSpent?:   number;
+  walletSpent?: number;
   startDate:    string;
   endDate:      string;
   color?:       string;

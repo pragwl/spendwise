@@ -22,14 +22,17 @@ export const budgetController = {
         where:   status ? { status: String(status) } : undefined,
         orderBy: { createdAt: "desc" },
         include: {
-          expenses: { select: { amount: true } },
+          expenses: { select: { amount: true, source: { select: { type: true } } } },
           _count:   { select: { expenses: true } },
         },
       });
 
+      type ExpRow = { amount: unknown; source: { type: string | null } | null };
       const enriched = budgets.map((b: typeof budgets[number]) => ({
         ...b,
-        usedAmount: b.expenses.reduce((s: number, e: { amount: unknown }) => s + Number(e.amount), 0),
+        usedAmount:  b.expenses.reduce((s: number, e: ExpRow) => s + Number(e.amount), 0),
+        cashSpent:   b.expenses.filter((e: ExpRow) => e.source?.type?.toLowerCase() === "cash")  .reduce((s: number, e: ExpRow) => s + Number(e.amount), 0),
+        walletSpent: b.expenses.filter((e: ExpRow) => e.source?.type?.toLowerCase() === "wallet").reduce((s: number, e: ExpRow) => s + Number(e.amount), 0),
         expenses: undefined,
       }));
 
