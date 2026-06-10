@@ -3,7 +3,7 @@ import { AppError } from "../utils/errors";
 import { sendError } from "../utils/response";
 import { config } from "../config";
 import { ZodError } from "zod";
-import { Prisma } from "@prisma/client";
+import { PrismaClientKnownRequestError, PrismaClientValidationError } from "@prisma/client/runtime/library";
 
 export function errorHandler(
   err: Error,
@@ -16,7 +16,7 @@ export function errorHandler(
     return sendError(res, message, 400, "VALIDATION_ERROR");
   }
 
-  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+  if (err instanceof PrismaClientKnownRequestError) {
     if (err.code === "P2002") {
       return sendError(res, "A record with this value already exists", 409, "DUPLICATE");
     }
@@ -28,7 +28,7 @@ export function errorHandler(
     }
   }
 
-  if (err instanceof Prisma.PrismaClientValidationError) {
+  if (err instanceof PrismaClientValidationError) {
     return sendError(res, "Invalid data provided", 400, "VALIDATION_ERROR");
   }
 

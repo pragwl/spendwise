@@ -50,7 +50,7 @@ export const budgetController = {
       });
       if (!budget) throw new NotFoundError("Budget", req.params.id);
 
-      const usedAmount = budget.expenses.reduce((s, e) => s + Number(e.amount), 0);
+      const usedAmount = budget.expenses.reduce((s: number, e: { amount: unknown }) => s + Number(e.amount), 0);
       return sendSuccess(res, { ...budget, usedAmount });
     } catch (err) { next(err); }
   },
