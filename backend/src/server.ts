@@ -34,9 +34,9 @@ app.use(logger);
 
 app.use("/api/v1", routes);
 
-// Serve React frontend in production
+// Serve React frontend if dist exists (production)
 const frontendDist = path.join(__dirname, "../../frontend/dist");
-if (!config.server.isDev && fs.existsSync(frontendDist)) {
+if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {
     res.sendFile(path.join(frontendDist, "index.html"));
