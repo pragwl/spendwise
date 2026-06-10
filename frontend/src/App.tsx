@@ -114,6 +114,17 @@ function IconBtn({ icon, onClick, tone="muted" }: { icon:string; onClick:()=>voi
   </button>;
 }
 
+// ── Mobile detection ─────────────────────────────────────────────────────
+function useMobile() {
+  const [m, setM] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const fn = () => setM(window.innerWidth < 768);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+  return m;
+}
+
 // ── NAV ───────────────────────────────────────────────────────────────────
 const NAV = [
   { id:"dashboard",  label:"Dashboard",       emoji:"🏠" },
@@ -127,6 +138,7 @@ const NAV = [
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────
 function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
+  const mobile = useMobile();
   const { budgets, budgetsLoading, recentExpenses } = useData();
   const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
   const [trendData, setTrend] = useState<{month:string;spend:number}[]>([]);
@@ -156,7 +168,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
         <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Good morning 👋</h1>
         <p style={{ fontSize:13, color:T.muted, marginTop:5 }}>Here's where your money stands today.</p>
       </div>
-      <Btn size="lg" onClick={onAdd}>+ Add expense</Btn>
+      {!mobile && <Btn size="lg" onClick={onAdd}>+ Add expense</Btn>}
     </div>
 
     {/* Overview card */}
@@ -176,14 +188,14 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
         </div>
         <Progress pct={pct} tone={h.tone} h={11} />
       </div>
-      {summary && <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:11, marginTop:18 }}>
+      {summary && <div style={{ display:"grid", gridTemplateColumns:mobile?"repeat(2,1fr)":"repeat(3,1fr)", gap:mobile?8:11, marginTop:18 }}>
         {[
-          { label:"Transactions",   value:summary.totalTransactions },
+          { label:"Transactions",    value:summary.totalTransactions },
           { label:"Avg transaction", value:fmt(summary.avgTransaction) },
-          { label:"Active budgets", value:active.length },
-        ].map(s=><div key={s.label} style={{ borderRadius:14, background:T.cream, border:`1px solid ${T.line}`, padding:"12px 14px" }}>
-          <p style={{ fontSize:11, color:T.muted }}>{s.label}</p>
-          <p style={{ fontWeight:700, fontSize:19, color:T.ink, marginTop:4 }}>{s.value}</p>
+          { label:"Active budgets",  value:active.length },
+        ].map(s=><div key={s.label} style={{ borderRadius:14, background:T.cream, border:`1px solid ${T.line}`, padding:mobile?"10px 12px":"12px 14px" }}>
+          <p style={{ fontSize:11, color:T.muted, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.label}</p>
+          <p style={{ fontWeight:700, fontSize:mobile?16:19, color:T.ink, marginTop:4 }}>{s.value}</p>
         </div>)}
       </div>}
     </Card>
@@ -194,7 +206,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
         <span style={{ fontWeight:700, fontSize:16, color:T.ink }}>Active budgets</span>
         <button onClick={()=>goTo("budgets")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>View all →</button>
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))", gap:14 }}>
+      <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr":"repeat(auto-fill,minmax(260px,1fr))", gap:12 }}>
         {active.map(b => {
           const amt  = Number(b.amount || 0);
           const used = Number(b.usedAmount || 0);
@@ -266,7 +278,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
     {trendData.length>0 && <Card>
       <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>Monthly trend</span>
-      <ResponsiveContainer width="100%" height={180}>
+      <ResponsiveContainer width="100%" height={mobile?140:180}>
         <AreaChart data={trendData}>
           <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={T.primary} stopOpacity={.2}/><stop offset="95%" stopColor={T.primary} stopOpacity={0}/></linearGradient></defs>
           <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
@@ -282,6 +294,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
 // ── EXPENSES SCREEN ───────────────────────────────────────────────────────
 function ExpensesScreen({ onOpenExpense }: { onOpenExpense:(e?:Expense)=>void }) {
+  const mobile = useMobile();
   const { expenses, expensesLoading, deleteExpense, categories, budgets, setExpenseFilters } = useData();
   const [q, setQ] = useState("");
 
@@ -296,7 +309,7 @@ function ExpensesScreen({ onOpenExpense }: { onOpenExpense:(e?:Expense)=>void })
         <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Expenses</h1>
         <p style={{ fontSize:13, color:T.muted, marginTop:5 }}>{filtered.length} transactions</p>
       </div>
-      <Btn size="lg" onClick={()=>onOpenExpense()}>+ Add expense</Btn>
+      {!mobile && <Btn size="lg" onClick={()=>onOpenExpense()}>+ Add expense</Btn>}
     </div>
     <Card style={{ marginBottom:18 }}>
       <div style={{ display:"flex", flexDirection:"column", gap:11 }}>
@@ -305,20 +318,20 @@ function ExpensesScreen({ onOpenExpense }: { onOpenExpense:(e?:Expense)=>void })
           <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search expenses…"
             style={{ width:"100%", padding:"10px 13px 10px 36px", borderRadius:13, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:14, outline:"none", fontFamily:"inherit" }} />
         </div>
-        <div style={{ display:"flex", gap:9, flexWrap:"wrap" }}>
+        <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr":"1fr 1fr", gap:8 }}>
           <div style={{ position:"relative" }}>
             <select onChange={e=>setExpenseFilters(f=>({...f,categoryId:e.target.value||undefined}))}
-              style={{ padding:"7px 26px 7px 10px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:12, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
+              style={{ width:"100%", padding:"9px 28px 9px 12px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:13, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
               <option value="">All categories</option>
               {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-            </select><span style={{ position:"absolute", right:7, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
+            </select><span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
           </div>
           <div style={{ position:"relative" }}>
             <select onChange={e=>setExpenseFilters(f=>({...f,budgetId:e.target.value||undefined}))}
-              style={{ padding:"7px 26px 7px 10px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:12, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
+              style={{ width:"100%", padding:"9px 28px 9px 12px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:13, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
               <option value="">All budgets</option>
               {budgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
-            </select><span style={{ position:"absolute", right:7, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
+            </select><span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
           </div>
         </div>
       </div>
@@ -895,7 +908,8 @@ function ReportsScreen() {
     </div>
     <Card>
       <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>All expenses</span>
-      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+      <div className="sw-table-wrap">
+      <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, minWidth:380 }}>
         <thead>
           <tr style={{ borderBottom:`1px solid ${T.line}` }}>
             {["Title","Category","Amount","Date"].map(h=><th key={h} style={{ textAlign:h==="Amount"||h==="Date"?"right":"left", padding:"7px 4px", fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>{h}</th>)}
@@ -912,16 +926,36 @@ function ReportsScreen() {
           ))}
         </tbody>
       </table>
+      </div>
     </Card>
   </div>;
 }
 
 // ── APP SHELL ─────────────────────────────────────────────────────────────
+const BOTTOM_TABS = [
+  { id:"dashboard", emoji:"🏠", label:"Home" },
+  { id:"expenses",  emoji:"📋", label:"Expenses" },
+  { id:"budgets",   emoji:"💰", label:"Budgets" },
+  { id:"analytics", emoji:"📊", label:"Analytics" },
+];
+const MORE_NAV = [
+  { id:"categories", emoji:"🏷️", label:"Categories" },
+  { id:"sources",    emoji:"💳", label:"Sources" },
+  { id:"reports",    emoji:"📁", label:"Reports" },
+];
+const MORE_IDS = MORE_NAV.map(m => m.id);
+const PAGE_TITLE: Record<string,string> = {
+  dashboard:"Dashboard", budgets:"Budgets", expenses:"Expenses",
+  categories:"Categories", sources:"Sources", analytics:"Analytics", reports:"Reports",
+};
+
 function AppShell() {
+  const mobile = useMobile();
   const [route, setRoute] = useState(()=>localStorage.getItem("sw_route")||"dashboard");
   const [expModal, setExpModal] = useState<{open:boolean; expense?:Expense}>({open:false});
+  const [showMore, setShowMore] = useState(false);
 
-  const goTo = (r:string) => { setRoute(r); localStorage.setItem("sw_route",r); window.scrollTo(0,0); };
+  const goTo = (r:string) => { setRoute(r); localStorage.setItem("sw_route",r); window.scrollTo(0,0); setShowMore(false); };
   const openExpense = (e?:Expense) => setExpModal({open:true, expense:e});
 
   const screens: Record<string,React.ReactNode> = {
@@ -934,39 +968,122 @@ function AppShell() {
     reports:    <ReportsScreen />,
   };
 
-  return (
-    <div style={{ minHeight:"100vh", display:"flex", background:"#FAF7F4", fontFamily:"'Plus Jakarta Sans',sans-serif" }}>
-      {/* Sidebar */}
-      <aside style={{ width:240, flexShrink:0, borderRight:`1px solid ${T.line}`, background:T.paper, position:"sticky", top:0, height:"100vh", overflowY:"auto", display:"flex", flexDirection:"column" }}>
-        <div style={{ padding:"20px 16px 16px" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-            <div style={{ width:33, height:33, borderRadius:10, background:T.primary, display:"grid", placeItems:"center", fontSize:17 }}>🐷</div>
-            <span style={{ fontWeight:800, fontSize:18, color:T.ink, letterSpacing:"-.02em" }}>{appConfig.app.name}</span>
-          </div>
-        </div>
-        <nav style={{ flex:1, padding:"0 8px", display:"flex", flexDirection:"column", gap:2 }}>
-          {NAV.map(n=>{ const a=route===n.id; return (
-            <button key={n.id} onClick={()=>goTo(n.id)}
-              style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:12, border:"none", cursor:"pointer",
-                       background:a?T.primaryS:"transparent", color:a?T.primary:T.muted, fontWeight:600, fontSize:13,
-                       transition:"all .15s", textAlign:"left", width:"100%", fontFamily:"inherit" }}>
-              <span style={{ fontSize:16 }}>{n.emoji}</span>{n.label}
-            </button>
-          ); })}
-        </nav>
-      </aside>
+  const moreActive = MORE_IDS.includes(route);
 
-      {/* Main */}
-      <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column" }}>
-        <header style={{ position:"sticky", top:0, zIndex:30, display:"flex", alignItems:"center", padding:"12px 32px", background:"#FAF7F4CC", backdropFilter:"blur(10px)", borderBottom:`1px solid ${T.line}` }}>
-          <div style={{ marginLeft:"auto" }}>
-            <Btn size="sm" onClick={()=>openExpense()}>+ Quick add</Btn>
+  return (
+    <div style={{ minHeight:"100vh", display:"flex", background:T.cream, fontFamily:"'Plus Jakarta Sans',sans-serif" }}>
+
+      {/* ── Desktop sidebar ── */}
+      {!mobile && (
+        <aside style={{ width:240, flexShrink:0, borderRight:`1px solid ${T.line}`, background:T.paper, position:"sticky", top:0, height:"100vh", overflowY:"auto", display:"flex", flexDirection:"column" }}>
+          <div style={{ padding:"20px 16px 16px" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+              <div style={{ width:33, height:33, borderRadius:10, background:T.primary, display:"grid", placeItems:"center", fontSize:17 }}>🐷</div>
+              <span style={{ fontWeight:800, fontSize:18, color:T.ink, letterSpacing:"-.02em" }}>{appConfig.app.name}</span>
+            </div>
           </div>
-        </header>
-        <main style={{ flex:1, padding:"22px 32px 40px", maxWidth:1280, width:"100%", margin:"0 auto" }}>
+          <nav style={{ flex:1, padding:"0 8px", display:"flex", flexDirection:"column", gap:2 }}>
+            {NAV.map(n=>{ const a=route===n.id; return (
+              <button key={n.id} onClick={()=>goTo(n.id)}
+                style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:12, border:"none", cursor:"pointer",
+                         background:a?T.primaryS:"transparent", color:a?T.primary:T.muted, fontWeight:600, fontSize:13,
+                         transition:"all .15s", textAlign:"left", width:"100%", fontFamily:"inherit" }}>
+                <span style={{ fontSize:16 }}>{n.emoji}</span>{n.label}
+              </button>
+            ); })}
+          </nav>
+        </aside>
+      )}
+
+      {/* ── Main column ── */}
+      <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column" }}>
+
+        {/* Desktop top bar */}
+        {!mobile && (
+          <header style={{ position:"sticky", top:0, zIndex:30, display:"flex", alignItems:"center", padding:"12px 32px", background:"#FAF7F4CC", backdropFilter:"blur(10px)", borderBottom:`1px solid ${T.line}` }}>
+            <div style={{ marginLeft:"auto" }}>
+              <Btn size="sm" onClick={()=>openExpense()}>+ Quick add</Btn>
+            </div>
+          </header>
+        )}
+
+        {/* Mobile top bar */}
+        {mobile && (
+          <header style={{ position:"sticky", top:0, zIndex:30, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px 12px", background:T.paper, borderBottom:`1px solid ${T.line}` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ width:28, height:28, borderRadius:9, background:T.primary, display:"grid", placeItems:"center", fontSize:14 }}>🐷</div>
+              <span style={{ fontWeight:800, fontSize:16, color:T.ink, letterSpacing:"-.02em" }}>{appConfig.app.name}</span>
+            </div>
+            <span style={{ fontWeight:700, fontSize:14, color:T.muted }}>{PAGE_TITLE[route]}</span>
+          </header>
+        )}
+
+        <main style={{ flex:1, padding:mobile?"14px 14px 100px":"22px 32px 40px", maxWidth:1280, width:"100%", margin:"0 auto" }}>
           {screens[route]||screens.dashboard}
         </main>
       </div>
+
+      {/* ── Mobile bottom navigation ── */}
+      {mobile && (
+        <>
+          {/* "More" sheet overlay */}
+          {showMore && (
+            <div style={{ position:"fixed", inset:0, zIndex:60 }} onClick={()=>setShowMore(false)}>
+              <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,.35)", backdropFilter:"blur(3px)" }} />
+              <div onClick={e=>e.stopPropagation()}
+                style={{ position:"absolute", bottom:70, left:12, right:12, background:T.paper, borderRadius:22, padding:"16px 8px", boxShadow:"0 -4px 32px rgba(0,0,0,.12)" }}>
+                <p style={{ fontSize:11, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".08em", padding:"0 12px 10px" }}>More</p>
+                {MORE_NAV.map(n=>{ const a=route===n.id; return (
+                  <button key={n.id} onClick={()=>goTo(n.id)}
+                    style={{ display:"flex", alignItems:"center", gap:14, padding:"13px 16px", borderRadius:14, border:"none", cursor:"pointer",
+                             background:a?T.primaryS:"transparent", color:a?T.primary:T.ink, fontWeight:600, fontSize:15,
+                             width:"100%", fontFamily:"inherit" }}>
+                    <span style={{ fontSize:22 }}>{n.emoji}</span>{n.label}
+                  </button>
+                ); })}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom tab bar */}
+          <nav style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:50, background:T.paper, borderTop:`1px solid ${T.line}`, display:"flex", alignItems:"center", height:64, paddingBottom:"env(safe-area-inset-bottom)" }}>
+            {BOTTOM_TABS.map((tab, i) => {
+              const a = route === tab.id && !moreActive;
+              /* Insert FAB in the middle (after index 1) */
+              const fabSlot = i === 2;
+              return (
+                <div key={tab.id} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center" }}>
+                  {fabSlot && (
+                    <button onClick={()=>openExpense()}
+                      style={{ width:50, height:50, borderRadius:99, background:T.primary, border:"none", cursor:"pointer",
+                               display:"grid", placeItems:"center", fontSize:24, color:"#fff",
+                               boxShadow:`0 4px 16px ${T.primary}66`, marginBottom:2 }}>
+                      +
+                    </button>
+                  )}
+                  {!fabSlot && (
+                    <button onClick={()=>goTo(tab.id)}
+                      style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"6px 10px", border:"none",
+                               background:"transparent", cursor:"pointer", color:a?T.primary:T.faint, fontFamily:"inherit", minWidth:52 }}>
+                      <span style={{ fontSize:20 }}>{tab.emoji}</span>
+                      <span style={{ fontSize:10, fontWeight:700 }}>{tab.label}</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {/* More tab */}
+            <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center" }}>
+              <button onClick={()=>setShowMore(p=>!p)}
+                style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"6px 10px", border:"none",
+                         background:"transparent", cursor:"pointer", color:(moreActive||showMore)?T.primary:T.faint, fontFamily:"inherit", minWidth:52 }}>
+                <span style={{ fontSize:20 }}>☰</span>
+                <span style={{ fontSize:10, fontWeight:700 }}>More</span>
+              </button>
+            </div>
+          </nav>
+        </>
+      )}
 
       <ExpenseFormModal
         open={expModal.open}
@@ -979,6 +1096,9 @@ function AppShell() {
         *{box-sizing:border-box;margin:0;padding:0}
         body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased}
         select,input,button{font-family:'Plus Jakarta Sans',sans-serif}
+        @media(max-width:767px){
+          .sw-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        }
       `}</style>
     </div>
   );
