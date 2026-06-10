@@ -369,19 +369,15 @@ function ExpensesScreen({ onOpenExpense }: { onOpenExpense:(e?:Expense)=>void })
 }
 
 // ── EXPENSE FORM MODAL (add + edit) ───────────────────────────────────────
-const isCC = (src?: PaymentSource) => !!src?.type?.toLowerCase().includes("credit");
-
 function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()=>void; expense?:Expense }) {
   const { categories, budgets, sources, createExpense, updateExpense, updateSource } = useData();
   const isEdit = !!expense;
   const blank = { title:"", amount:"", date:new Date().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"" };
   const [f, sf] = useState(blank);
-  const [isPaid, setIsPaid] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
   const selectedSource = sources.find(s => s.id === f.sourceId);
-  const creditCard = isCC(selectedSource);
 
   useEffect(()=>{
     if (open) {
@@ -394,7 +390,6 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
         sourceId:   expense.sourceId   || "",
         notes:      expense.notes      || "",
       } : blank);
-      setIsPaid(false);
       setErr("");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -416,16 +411,9 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
       if (isEdit) await updateExpense(expense!.id, payload);
       else         await createExpense(payload);
 
-      // Update source balance if applicable
+      // Add expense amount to source balance (tracks total spent on this source)
       if (!isEdit && selectedSource && selectedSource.balance != null) {
-        const cur = Number(selectedSource.balance);
-        if (creditCard) {
-          // Credit card: if marked paid → reset to 0; otherwise add to owed balance
-          await updateSource(selectedSource.id, { balance: isPaid ? 0 : cur + expAmt });
-        } else {
-          // Debit/UPI/wallet: deduct from available balance
-          await updateSource(selectedSource.id, { balance: Math.max(0, cur - expAmt) });
-        }
+        await updateSource(selectedSource.id, { balance: Number(selectedSource.balance) + expAmt });
       }
 
       onClose();
@@ -467,33 +455,16 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
             <option value="">No budget</option>
             {budgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
           </Sel>
-          <Sel label="Paid with" value={f.sourceId} onChange={e=>{ sf(p=>({...p,sourceId:e.target.value})); setIsPaid(false); }}>
+          <Sel label="Paid with" value={f.sourceId} onChange={e=>sf(p=>({...p,sourceId:e.target.value}))}>
             <option value="">Select source</option>
             {sources.map(s=><option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
           </Sel>
         </div>
 
-        {/* Credit card: show "Is paid?" toggle */}
-        {creditCard && !isEdit && (
-          <div onClick={()=>setIsPaid(p=>!p)}
-            style={{ display:"flex", alignItems:"center", gap:11, padding:"12px 14px", borderRadius:13,
-                     border:`1.5px solid ${isPaid?T.sage:T.line}`, background:isPaid?T.sageS:T.cream, cursor:"pointer" }}>
-            <div style={{ width:20, height:20, borderRadius:6, border:`2px solid ${isPaid?T.sage:T.faint}`,
-                          background:isPaid?T.sage:"transparent", display:"grid", placeItems:"center", flexShrink:0 }}>
-              {isPaid && <span style={{ color:"#fff", fontSize:12, lineHeight:1 }}>✓</span>}
-            </div>
-            <div style={{ flex:1 }}>
-              <p style={{ fontSize:13, fontWeight:700, color:isPaid?T.sage:T.ink }}>Mark bill as paid</p>
-              <p style={{ fontSize:11, color:T.muted }}>{isPaid?"Credit card balance will be reset to ₹0":"Credit card balance will increase by this amount"}</p>
-            </div>
-            <span style={{ fontSize:18 }}>💳</span>
-          </div>
-        )}
-
-        {/* Non-credit source with balance: show deduction preview */}
-        {selectedSource && selectedSource.balance != null && !creditCard && f.amount && (
-          <div style={{ padding:"10px 14px", borderRadius:12, background:T.skyS, border:`1px solid ${T.sky}22`, fontSize:12, color:T.sky, fontWeight:600 }}>
-            Balance after: {fmt(Math.max(0, Number(selectedSource.balance) - Number(f.amount)))} (was {fmt(Number(selectedSource.balance))})
+        {/* Spending preview when source has balance tracking */}
+        {selectedSource && selectedSource.balance != null && f.amount && !isEdit && (
+          <div style={{ padding:"10px 14px", borderRadius:12, background:T.primaryS, border:`1px solid ${T.primary}22`, fontSize:12, color:T.primary, fontWeight:600 }}>
+            Total spent on {selectedSource.name}: {fmt(Number(selectedSource.balance) + Number(f.amount))}
           </div>
         )}
 
@@ -728,7 +699,6 @@ function SourcesScreen() {
     {srcsLoading ? <Spinner /> : (
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))", gap:14 }}>
         {sources.map(s=>{
-          const cc = isCC(s);
           const bal = s.balance != null ? Number(s.balance) : null;
           return (
           <Card key={s.id}>
@@ -747,18 +717,9 @@ function SourcesScreen() {
             </div>
 
             {bal != null && (
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                <div>
-                  <p style={{ fontSize:11, color:T.muted }}>{cc ? "Outstanding balance" : "Available balance"}</p>
-                  <p style={{ fontSize:16, fontWeight:800, color:cc ? (bal>0?T.warn:T.sage) : T.sage }}>{fmt(bal)}</p>
-                </div>
-                {cc && bal > 0 && (
-                  <button onClick={()=>updateSource(s.id, {balance:0})}
-                    style={{ padding:"7px 14px", borderRadius:11, background:T.sageS, color:T.sage, border:`1px solid ${T.sage}44`,
-                             fontWeight:700, fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>
-                    ✓ Mark paid
-                  </button>
-                )}
+              <div style={{ marginBottom:6 }}>
+                <p style={{ fontSize:11, color:T.muted }}>Total spent</p>
+                <p style={{ fontSize:16, fontWeight:800, color:T.primary }}>{fmt(bal)}</p>
               </div>
             )}
 
