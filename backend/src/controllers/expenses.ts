@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import prisma from "../db";
 import { sendSuccess } from "../utils/response";
-import { NotFoundError } from "../utils/errors";
+import { NotFoundError, ValidationError } from "../utils/errors";
 import { config } from "../config";
 import { z } from "zod";
 
@@ -14,7 +14,30 @@ const ExpenseSchema = z.object({
   budgetId:   z.string().uuid().optional().nullable(),
   sourceId:   z.string().uuid().optional().nullable(),
   tags:       z.array(z.string()).optional(),
+  costType:   z.enum(["fixed", "variable"]).optional().default("variable"),
 });
+
+async function validateSplitTenderMatch(budgetId: string, sourceId: string): Promise<void> {
+  const source = await prisma.paymentSource.findUnique({
+    where:  { id: sourceId },
+    select: { splitTenderId: true, name: true },
+  });
+  if (!source) throw new NotFoundError("Payment source", sourceId);
+
+  // If source has no split tender assigned, skip validation
+  if (!source.splitTenderId) return;
+
+  const link = await prisma.budgetSplitTender.findUnique({
+    where: { budgetId_splitTenderId: { budgetId, splitTenderId: source.splitTenderId } },
+  });
+
+  if (!link) {
+    throw new ValidationError(
+      `Mismatch: the payment source "${source.name}" belongs to a split tender that is not linked to the selected budget. ` +
+      "Add the corresponding split tender to the budget first."
+    );
+  }
+}
 
 export const expenseController = {
   async getAll(req: Request, res: Response, next: NextFunction) {
@@ -42,6 +65,7 @@ export const expenseController = {
           ...(endDate   ? { lte: new Date(String(endDate))   } : {}),
         };
       }
+      if (req.query.costType) where.costType = String(req.query.costType);
       if (search) {
         where.OR = [
           { title: { contains: String(search), mode: "insensitive" } },
@@ -77,9 +101,14 @@ export const expenseController = {
 
   async create(req: Request, res: Response, next: NextFunction) {
     try {
-      const data    = ExpenseSchema.parse(req.body);
+      const data = ExpenseSchema.parse(req.body);
+
+      if (data.budgetId && data.sourceId) {
+        await validateSplitTenderMatch(data.budgetId, data.sourceId);
+      }
+
       const expense = await prisma.expense.create({
-        data: { ...data, date: new Date(data.date), tags: data.tags || [] },
+        data:    { ...data, date: new Date(data.date), tags: data.tags || [] },
         include: { category: true, budget: true, source: true },
       });
       return sendSuccess(res, expense, 201);
@@ -88,7 +117,19 @@ export const expenseController = {
 
   async update(req: Request, res: Response, next: NextFunction) {
     try {
-      const data    = ExpenseSchema.partial().parse(req.body);
+      const data = ExpenseSchema.partial().parse(req.body);
+
+      // Merge with existing values to validate the final state
+      const existing = await prisma.expense.findUnique({ where: { id: req.params.id } });
+      if (!existing) throw new NotFoundError("Expense", req.params.id);
+
+      const mergedBudgetId = data.budgetId  !== undefined ? data.budgetId  : existing.budgetId;
+      const mergedSourceId = data.sourceId  !== undefined ? data.sourceId  : existing.sourceId;
+
+      if (mergedBudgetId && mergedSourceId) {
+        await validateSplitTenderMatch(mergedBudgetId, mergedSourceId);
+      }
+
       const expense = await prisma.expense.update({
         where:   { id: req.params.id },
         data:    { ...data, ...(data.date ? { date: new Date(data.date) } : {}) },

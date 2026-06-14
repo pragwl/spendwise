@@ -7,6 +7,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model SplitTender {
+  id            String              @id @default(uuid())
+  name          String              @unique
+  description   String?
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt      @map("updated_at")
+
+  sources       PaymentSource[]
+  budgetTenders BudgetSplitTender[]
+
+  @@map("split_tenders")
+}
+
+model BudgetSplitTender {
+  id              String      @id @default(uuid())
+  allocatedAmount Decimal     @db.Decimal(15, 2) @map("allocated_amount")
+  threshold       Decimal?    @db.Decimal(5, 2)  @map("threshold")
+
+  budgetId        String      @map("budget_id")
+  budget          Budget      @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  splitTenderId   String      @map("split_tender_id")
+  splitTender     SplitTender @relation(fields: [splitTenderId], references: [id], onDelete: Restrict)
+
+  @@unique([budgetId, splitTenderId])
+  @@index([budgetId])
+  @@map("budget_split_tenders")
+}
+
 model Category {
   id        String    @id @default(uuid())
   name      String    @unique
@@ -20,31 +49,37 @@ model Category {
 }
 
 model PaymentSource {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  type      String?
-  icon      String?
-  color     String?
-  balance   Decimal?  @db.Decimal(15, 2)
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt      @map("updated_at")
-  expenses  Expense[]
+  id            String       @id @default(uuid())
+  name          String       @unique
+  type          String?
+  icon          String?
+  color         String?
+  balance       Decimal?     @db.Decimal(15, 2)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt      @map("updated_at")
+
+  splitTenderId String?      @map("split_tender_id")
+  splitTender   SplitTender? @relation(fields: [splitTenderId], references: [id], onDelete: SetNull)
+
+  expenses      Expense[]
 
   @@map("payment_sources")
 }
 
 model Budget {
-  id          String    @id @default(uuid())
-  name        String
-  description String?
-  amount      Decimal   @db.Decimal(15, 2)
-  startDate   DateTime  @map("start_date") @db.Date
-  endDate     DateTime  @map("end_date")   @db.Date
-  color       String?
-  status      String    @default("active")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt      @map("updated_at")
-  expenses    Expense[]
+  id            String              @id @default(uuid())
+  name          String
+  description   String?
+  amount        Decimal             @db.Decimal(15, 2)
+  startDate     DateTime            @map("start_date") @db.Date
+  endDate       DateTime            @map("end_date")   @db.Date
+  color         String?
+  status        String              @default("active")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt      @map("updated_at")
+
+  splitTenders  BudgetSplitTender[]
+  expenses      Expense[]
 
   @@map("budgets")
 }
@@ -56,6 +91,7 @@ model Expense {
   date       DateTime      @db.Date
   notes      String?
   tags       String[]      @default([])
+  costType   String        @default("variable") @map("cost_type")
   createdAt  DateTime      @default(now()) @map("created_at")
   updatedAt  DateTime      @updatedAt      @map("updated_at")
 
@@ -72,5 +108,6 @@ model Expense {
   @@index([categoryId])
   @@index([budgetId])
   @@index([sourceId])
+  @@index([costType])
   @@map("expenses")
 }

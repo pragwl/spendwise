@@ -12,6 +12,7 @@ export interface ExpenseFilters {
   order?:      "asc" | "desc";
   limit?:      number;
   offset?:     number;
+  costType?:   "fixed" | "variable";
 }
 
 export const expensesApi = {

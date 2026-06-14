@@ -1,3 +1,19 @@
+export interface SplitTender {
+  id:           string;
+  name:         string;
+  description?: string;
+  createdAt:    string;
+  _count?:      { sources: number; budgetTenders: number };
+}
+
+export interface BudgetSplitTenderAllocation {
+  splitTenderId:   string;
+  splitTenderName: string;
+  allocatedAmount: number;
+  spentAmount:     number;
+  threshold?:      number | null;
+}
+
 export interface Category {
   id:        string;
   name:      string;
@@ -8,30 +24,31 @@ export interface Category {
 }
 
 export interface PaymentSource {
-  id:        string;
-  name:      string;
-  type?:     string;
-  icon?:     string;
-  color?:    string;
-  balance?:  number | null;
-  createdAt: string;
-  _count?:   { expenses: number };
+  id:             string;
+  name:           string;
+  type?:          string;
+  icon?:          string;
+  color?:         string;
+  balance?:       number | null;
+  createdAt:      string;
+  _count?:        { expenses: number };
+  splitTenderId?: string | null;
+  splitTender?:   { id: string; name: string } | null;
 }
 
 export interface Budget {
-  id:           string;
-  name:         string;
-  description?: string;
-  amount:       number;
-  usedAmount?:  number;
-  cashSpent?:   number;
-  walletSpent?: number;
-  startDate:    string;
-  endDate:      string;
-  color?:       string;
-  status:       "active" | "completed" | "paused";
-  createdAt:    string;
-  _count?:      { expenses: number };
+  id:               string;
+  name:             string;
+  description?:     string;
+  amount:           number;
+  usedAmount?:      number;
+  startDate:        string;
+  endDate:          string;
+  color?:           string;
+  status:           "active" | "completed" | "paused";
+  createdAt:        string;
+  _count?:          { expenses: number };
+  tenderAnalytics?: BudgetSplitTenderAllocation[];
 }
 
 export interface Expense {
@@ -41,6 +58,7 @@ export interface Expense {
   date:        string;
   notes?:      string;
   tags:        string[];
+  costType?:   "fixed" | "variable";
   categoryId?: string;
   budgetId?:   string;
   sourceId?:   string;
