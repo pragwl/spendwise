@@ -6,7 +6,7 @@ import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
   PieChart, Pie, Cell, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, AreaChart, Area,
 } from "recharts";
 
@@ -119,8 +119,8 @@ function computeSourceBreakdown(expenses: Expense[]) {
 }
 
 // ── Tiny UI ───────────────────────────────────────────────────────────────
-function Card({ children, style={} }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <div style={{ background:T.paper, border:`1px solid ${T.line}`, borderRadius:20, padding:"20px 22px", ...style }}>{children}</div>;
+function Card({ children, style={}, onClick }: { children: React.ReactNode; style?: React.CSSProperties; onClick?: () => void }) {
+  return <div style={{ background:T.paper, border:`1px solid ${T.line}`, borderRadius:20, padding:"20px 22px", cursor:onClick?"pointer":"default", ...style }} onClick={onClick}>{children}</div>;
 }
 function Btn({ children, onClick, variant="primary", full, size="md", disabled }: {
   children: React.ReactNode; onClick?: () => void; variant?: string; full?: boolean; size?: string; disabled?: boolean;
@@ -190,16 +190,17 @@ function KpiInfo({ text }: { text: string }) {
 function Modal({ open, onClose, title, children, footer }: {
   open: boolean; onClose: () => void; title: string; children: React.ReactNode; footer?: React.ReactNode;
 }) {
+  const mobile = useMobile();
   if (!open) return null;
-  return <div style={{ position:"fixed", inset:0, zIndex:999, display:"flex", alignItems:"flex-end", justifyContent:"center" }} onClick={onClose}>
+  return <div style={{ position:"fixed", inset:0, zIndex:999, display:"flex", alignItems: mobile ? "flex-end" : "center", justifyContent:"center" }} onClick={onClose}>
     <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,.4)", backdropFilter:"blur(3px)" }} />
-    <div onClick={e=>e.stopPropagation()} style={{ position:"relative", width:"100%", maxWidth:480, background:T.paper, borderRadius:"22px 22px 0 0", maxHeight:"90vh", display:"flex", flexDirection:"column" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px 20px", borderBottom:`1px solid ${T.line}`, flexShrink:0 }}>
-        <span style={{ fontWeight:800, fontSize:17, color:T.ink }}>{title}</span>
+    <div onClick={e=>e.stopPropagation()} style={{ position:"relative", width:"100%", maxWidth:480, background:T.paper, borderRadius: mobile ? "22px 22px 0 0" : 20, maxHeight: mobile ? "95vh" : "85vh", display:"flex", flexDirection:"column" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"14px 18px", borderBottom:`1px solid ${T.line}`, flexShrink:0 }}>
+        <span style={{ fontWeight:800, fontSize:16, color:T.ink }}>{title}</span>
         <button onClick={onClose} style={{ width:30, height:30, borderRadius:9, background:T.raised, border:`1px solid ${T.line}`, cursor:"pointer", fontSize:14 }}>✕</button>
       </div>
-      <div style={{ padding:"18px 20px", overflowY:"auto", flex:1 }}>{children}</div>
-      {footer && <div style={{ padding:"14px 20px", borderTop:`1px solid ${T.line}` }}>{footer}</div>}
+      <div style={{ padding: mobile ? "14px 16px" : "18px 20px", overflowY:"auto", flex:1, WebkitOverflowScrolling:"touch" } as React.CSSProperties}>{children}</div>
+      {footer && <div style={{ padding: mobile ? "12px 16px" : "14px 20px", borderTop:`1px solid ${T.line}`, flexShrink:0 }}>{footer}</div>}
     </div>
   </div>;
 }
@@ -629,7 +630,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 // ── EXPENSES SCREEN ───────────────────────────────────────────────────────
 type ExpFilters = { categoryId:string; budgetId:string; sourceId:string; startDate:string; endDate:string; sortBy:"date"|"amount"; order:"asc"|"desc" };
 const defaultExpFilters: ExpFilters = { categoryId:"", budgetId:"", sourceId:"", startDate:"", endDate:"", sortBy:"date", order:"desc" };
-type NavFilters = { categoryId?:string; sourceId?:string; budgetIds?:string[]; startDate?:string; endDate?:string; dayOfWeek?:number; label?:string };
+type NavFilters = { categoryId?:string; sourceId?:string; budgetIds?:string[]; startDate?:string; endDate?:string; dayOfWeek?:number; label?:string; costType?:"fixed"|"variable"; unbudgeted?:boolean; spikeDates?:string[] };
 
 function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   onOpenExpense:(e?:Expense)=>void;
@@ -644,6 +645,9 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   const [localLoading, setLocalLoading] = useState(false);
   const [activeDowFilter, setActiveDowFilter] = useState<number|null>(null);
   const [navLabel, setNavLabel] = useState("");
+  const [navCostType, setNavCostType]     = useState<"fixed"|"variable"|null>(null);
+  const [navUnbudgeted, setNavUnbudgeted] = useState(false);
+  const [navSpikeDates, setNavSpikeDates] = useState<Set<string>|null>(null);
 
   const activeBudgets = budgets.filter(b => b.status === "active");
 
@@ -663,6 +667,9 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       setQ("");
       if (navFilters.label) setNavLabel(navFilters.label);
       if (navFilters.dayOfWeek !== undefined) setActiveDowFilter(navFilters.dayOfWeek);
+      if (navFilters.costType) setNavCostType(navFilters.costType);
+      if (navFilters.unbudgeted) setNavUnbudgeted(true);
+      if (navFilters.spikeDates?.length) setNavSpikeDates(new Set(navFilters.spikeDates));
       onNavFiltersConsumed?.();
 
       const apiFilters = {
@@ -693,6 +700,9 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       setQ("");
       setNavLabel("");
       setActiveDowFilter(null);
+      setNavCostType(null);
+      setNavUnbudgeted(false);
+      setNavSpikeDates(null);
       setLocalExp(null);
       setExpenseFilters({ limit:50, sortBy:"date", order:"desc" as const });
     }
@@ -714,12 +724,15 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
-  const hasFilter = !!(filters.categoryId || filters.budgetId || filters.sourceId || filters.startDate || filters.endDate || q || activeDowFilter !== null);
+  const hasFilter = !!(filters.categoryId || filters.budgetId || filters.sourceId || filters.startDate || filters.endDate || q || activeDowFilter !== null || navCostType || navUnbudgeted || navSpikeDates);
   // Use locally fetched set (multi-budget drill) or DataContext
   const baseExp = localExp ?? expenses;
-  // Day-of-week client-side post-filter
-  const dowExp = activeDowFilter !== null ? baseExp.filter(e => new Date(e.date).getDay() === activeDowFilter) : baseExp;
-  const filtered = dowExp.filter(e => !q || e.title.toLowerCase().includes(q.toLowerCase()));
+  // Client-side post-filters applied in sequence
+  const dowExp      = activeDowFilter !== null ? baseExp.filter(e => new Date(e.date).getDay() === activeDowFilter) : baseExp;
+  const costExp     = navCostType ? dowExp.filter(e => navCostType === "fixed" ? e.costType === "fixed" : e.costType !== "fixed") : dowExp;
+  const unbudgExp   = navUnbudgeted ? costExp.filter(e => !e.budgetId) : costExp;
+  const spikeExp    = navSpikeDates ? unbudgExp.filter(e => navSpikeDates!.has(e.date.slice(0,10))) : unbudgExp;
+  const filtered    = spikeExp.filter(e => !q || e.title.toLowerCase().includes(q.toLowerCase()));
   const groups = filtered.reduce((m:Record<string,typeof expenses>, e)=>{
     const d = e.date.slice(0,10); if (!m[d]) m[d]=[]; m[d].push(e); return m;
   }, {});
@@ -737,7 +750,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:12, background:T.primary+"18", border:`1px solid ${T.primary}44`, marginBottom:14, flexWrap:"wrap" }}>
         <span style={{ fontSize:13 }}>📊</span>
         <span style={{ fontSize:13, fontWeight:600, color:T.primary, flex:1 }}>From Analytics: {navLabel}</span>
-        <button onClick={()=>{ setNavLabel(""); setActiveDowFilter(null); setLocalExp(null); setFilters(f=>({...defaultExpFilters,sortBy:f.sortBy,order:f.order})); setQ(""); setExpenseFilters({ limit:50, sortBy:"date", order:"desc" as const }); }}
+        <button onClick={()=>{ setNavLabel(""); setActiveDowFilter(null); setNavCostType(null); setNavUnbudgeted(false); setNavSpikeDates(null); setLocalExp(null); setFilters(f=>({...defaultExpFilters,sortBy:f.sortBy,order:f.order})); setQ(""); setExpenseFilters({ limit:50, sortBy:"date", order:"desc" as const }); }}
           style={{ fontSize:12, color:T.primary, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", padding:0, fontWeight:600 }}>✕ Clear</button>
       </div>
     )}
@@ -785,7 +798,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
           </button>
         </div>
         {hasFilter && (
-          <button onClick={()=>{ setFilters(f=>({...defaultExpFilters,sortBy:f.sortBy,order:f.order})); setQ(""); setActiveDowFilter(null); setLocalExp(null); setNavLabel(""); setExpenseFilters({ limit:50, sortBy:"date", order:"desc" as const }); }}
+          <button onClick={()=>{ setFilters(f=>({...defaultExpFilters,sortBy:f.sortBy,order:f.order})); setQ(""); setActiveDowFilter(null); setNavCostType(null); setNavUnbudgeted(false); setNavSpikeDates(null); setLocalExp(null); setNavLabel(""); setExpenseFilters({ limit:50, sortBy:"date", order:"desc" as const }); }}
             style={{ fontSize:12, color:T.primary, background:"none", border:"none", cursor:"pointer", textAlign:"left", fontFamily:"inherit", padding:0 }}>
             ✕ Clear all filters
           </button>
@@ -849,6 +862,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
 // ── EXPENSE FORM MODAL (add + edit) ───────────────────────────────────────
 function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()=>void; expense?:Expense }) {
   const { categories, budgets, sources, splitTenders, createExpense, updateExpense, updateSource } = useData();
+  const mobile = useMobile();
   const isEdit = !!expense;
   const blank = { title:"", amount:"", date:new Date().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable" };
   const [f, sf] = useState(blank);
@@ -927,7 +941,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
         </div>
         <div>
           <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", display:"block", marginBottom:8 }}>Category</span>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:7 }}>
+          <div style={{ display:"grid", gridTemplateColumns:`repeat(${mobile?3:4},1fr)`, gap:7 }}>
             {categories.map(c=>{ const a=f.categoryId===c.id; return (
               <button key={c.id} onClick={()=>sf(p=>({...p,categoryId:c.id}))}
                 style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:5, padding:"9px 5px", borderRadius:13,
@@ -1425,7 +1439,7 @@ function CategoriesScreen() {
         <Inp label="Name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Groceries" />
         <div>
           <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", display:"block", marginBottom:8 }}>Emoji</span>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(10,1fr)", gap:6, marginBottom:8 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(38px,1fr))", gap:6, marginBottom:8 }}>
             {CAT_EMOJIS.map(e=>(
               <button key={e} onClick={()=>setForm(f=>({...f,icon:f.icon===e?"":e}))}
                 style={{ height:36, borderRadius:9, fontSize:18, border:`1.5px solid ${form.icon===e?T.primary:T.line}`,
@@ -1703,11 +1717,19 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     avgDaily = expSet.reduce((s,e)=>s+Number(e.amount),0) / totalRangeDays;
   }
 
-  // Day-of-week breakdown
+  // Day-of-week breakdown (split by cost type)
   const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const dowData = DOW.map((day,i)=>{
-    const dayExp = expSet.filter(e=>new Date(e.date).getDay()===i);
-    return { day, total:dayExp.reduce((s,e)=>s+Number(e.amount),0), count:dayExp.length };
+    const dayExp  = expSet.filter(e=>new Date(e.date).getDay()===i);
+    const dayFix  = dayExp.filter(e=>e.costType==="fixed");
+    const dayVar  = dayExp.filter(e=>e.costType!=="fixed");
+    return {
+      day,
+      fixed:    dayFix.reduce((s,e)=>s+Number(e.amount),0),
+      variable: dayVar.reduce((s,e)=>s+Number(e.amount),0),
+      total:    dayExp.reduce((s,e)=>s+Number(e.amount),0),
+      count:    dayExp.length,
+    };
   });
   const topDow = dowData.reduce((a,b)=>b.total>a.total?b:a, dowData[0]);
 
@@ -1724,16 +1746,19 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   // Spike days: days where spend > 1.5× avg daily
   const dailyTotalsArr = Object.values(dateMap);
   const spikeDays      = avgDaily > 0 ? dailyTotalsArr.filter(d=>d > avgDaily*1.5).length : 0;
+  const spikeDatesList = avgDaily > 0 ? Object.entries(dateMap).filter(([,v])=>v > avgDaily*1.5).map(([d])=>d) : [];
 
   // Spending frequency: % of days in range with ≥1 expense
   const activeDays    = Object.keys(dateMap).length;
   const activeDaysPct = Math.round(activeDays / totalRangeDays * 100);
 
-  // Weekend share: Sat (6) + Sun (0)
-  const weekendTotal = expSet
-    .filter(e=>{ const d=new Date(e.date).getDay(); return d===0||d===6; })
-    .reduce((s,e)=>s+Number(e.amount),0);
-  const weekendPct = total > 0 ? Math.round(weekendTotal/total*100) : 0;
+  // Weekend share: Sat (6) + Sun (0), split by cost type
+  const weekendExp      = expSet.filter(e=>{ const d=new Date(e.date).getDay(); return d===0||d===6; });
+  const weekendFixed    = weekendExp.filter(e=>e.costType==="fixed").reduce((s,e)=>s+Number(e.amount),0);
+  const weekendVariable = weekendExp.filter(e=>e.costType!=="fixed").reduce((s,e)=>s+Number(e.amount),0);
+  const weekendTotal    = weekendExp.reduce((s,e)=>s+Number(e.amount),0);
+  const weekendPct      = total > 0 ? Math.round(weekendTotal/total*100) : 0;
+  const weekendDatesList = [...new Set(weekendExp.map(e=>e.date.slice(0,10)))];
 
   // Month-over-month change (last two months of trend)
   const momChange = monthly.length >= 2
@@ -1757,7 +1782,8 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   // Top category share
   const topCatPct = cats.length > 0 && total > 0 ? Math.round((cats[0].total/total)*100) : 0;
 
-  type StatItem = { label:string; value:string; icon:string; tone:string; tip:string; sub?:string };
+  type StatItemRow = { icon:string; label:string; amount:string; tone:string; onClick?:()=>void };
+  type StatItem = { label:string; value:string; icon:string; tone:string; tip:string; sub?:string; onClick?:()=>void; rows?:StatItemRow[] };
   const stats: StatItem[] = [
     { label:"Total spent",         value:fmtS(total),                   icon:"💸", tone:"primary",
       tip:"Sum of all recorded expenses in scope. Use the budget filter above to narrow to a specific budget's expenses." },
@@ -1773,11 +1799,13 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     { label:"Unbudgeted spend",    value:fmtS(unbudgetedTotal),         icon:"🔓",
       tone: unbudgetedPct>30?"danger":unbudgetedPct>10?"warn":"sage",
       tip:"Total spent outside any budget. High unbudgeted spend means you're regularly spending beyond your planned categories — a direct root cause of budget overruns.",
-      sub:`${unbudgetedPct}% of total spend` },
+      sub:`${unbudgetedPct}% of total spend`,
+      onClick: onDrillTo && unbudgetedTotal > 0 ? ()=>onDrillTo({ unbudgeted:true, budgetIds:selBudgets.length?selBudgets:undefined, label:"Unbudgeted expenses" }) : undefined },
     { label:"Spike days",          value:String(spikeDays),              icon:"⚡",
       tone: spikeDays>5?"danger":spikeDays>2?"warn":"sage",
       tip:"Days where you spent 1.5× or more above your daily average. Frequent spikes point to impulsive or event-driven spending that is hard to budget for.",
-      sub: spikeDays>0 ? `vs ${fmtS(avgDaily)} avg/day` : "none detected" },
+      sub: spikeDays>0 ? `vs ${fmtS(avgDaily)} avg/day` : "none detected",
+      onClick: onDrillTo && spikeDays > 0 ? ()=>onDrillTo({ spikeDates:spikeDatesList, budgetIds:selBudgets.length?selBudgets:undefined, label:`Spike day expenses (${spikeDays} days)` }) : undefined },
     { label:"Spending frequency",  value:`${activeDaysPct}%`,            icon:"🗓️",
       tone: activeDaysPct>80?"warn":activeDaysPct>50?"sky":"sage",
       tip:"% of days in your expense history where you made at least one purchase. Very high frequency (>80%) suggests habitual daily spending as the root cause rather than one-time events.",
@@ -1785,25 +1813,43 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     { label:"Weekend share",       value:`${weekendPct}%`,               icon:"🌅",
       tone: weekendPct>45?"warn":"sky",
       tip:"Share of your total spending that happened on weekends (Sat & Sun). A high weekend share (>40%) often points to dining, entertainment, and leisure as the key budget pressure areas.",
-      sub:`${fmtS(weekendTotal)} on Sat/Sun` },
+      sub:`${fmtS(weekendTotal)} on Sat/Sun`,
+      onClick: onDrillTo && weekendTotal > 0 ? ()=>onDrillTo({ spikeDates:weekendDatesList, budgetIds:selBudgets.length?selBudgets:undefined, label:"Weekend expenses" }) : undefined,
+      rows: [
+        { icon:"📌", label:"Fixed",    amount:fmtS(weekendFixed),    tone:"sky",
+          onClick: onDrillTo && weekendFixed > 0 ? ()=>onDrillTo({ costType:"fixed",    spikeDates:weekendDatesList, budgetIds:selBudgets.length?selBudgets:undefined, label:"Weekend fixed expenses" })    : undefined },
+        { icon:"📊", label:"Variable", amount:fmtS(weekendVariable), tone:"warn",
+          onClick: onDrillTo && weekendVariable > 0 ? ()=>onDrillTo({ costType:"variable", spikeDates:weekendDatesList, budgetIds:selBudgets.length?selBudgets:undefined, label:"Weekend variable expenses" }) : undefined },
+      ] },
   ];
 
-  type InsightRow = { icon:string; label:string; amount:string; detail:string; rowTone:string };
+  type InsightRow = { icon:string; label:string; amount:string; detail:string; rowTone:string; onClick?:()=>void };
   type InsightItem = { icon:string; label:string; value?:string; sub?:string; rows?:InsightRow[]; tone:string; tip:string; onClick?:()=>void };
   const insights: InsightItem[] = ([
-    momChange !== null && {
-      icon: momChange >= 0 ? "📈" : "📉",
-      label: "vs last month",
-      value: `${momChange >= 0 ? "+" : ""}${momChange.toFixed(0)}%`,
-      tone: momChange > 15 ? "danger" : momChange < -5 ? "sage" : "sky",
-      tip: "Month-over-month change in total spending. Above +15% is a warning sign of accelerating spend; negative means you are cutting back.",
-    },
+    momChange !== null && (() => {
+      const lastMonth = monthly[monthly.length-2];
+      const curMonth  = monthly[monthly.length-1];
+      return {
+        icon: momChange >= 0 ? "📈" : "📉",
+        label: "vs last month",
+        value: `${momChange >= 0 ? "+" : ""}${momChange.toFixed(0)}%`,
+        tone: momChange > 15 ? "danger" : momChange < -5 ? "sage" : "sky",
+        tip: "Month-over-month change in total spending. Above +15% is a warning sign of accelerating spend; negative means you are cutting back.",
+        onClick: onDrillTo && curMonth ? ()=>onDrillTo({
+          startDate: `${curMonth.year}-${String(curMonth.monthNum).padStart(2,"0")}-01`,
+          endDate:   `${curMonth.year}-${String(curMonth.monthNum).padStart(2,"0")}-${String(new Date(curMonth.year,curMonth.monthNum,0).getDate()).padStart(2,"0")}`,
+          budgetIds: selBudgets.length?selBudgets:undefined,
+          label: `${curMonth.month} ${curMonth.year} expenses (vs ${lastMonth?.month??""})`,
+        }) : undefined,
+      };
+    })(),
     cats.length > 0 && {
       icon: cats[0].category?.icon || "📁",
       label: "top category",
       value: `${cats[0].category?.name || "Other"} · ${topCatPct}%`,
       tone: "primary",
       tip: "The single category consuming the largest share of total spend. If it is discretionary (dining, entertainment), it is likely the root cause of budget pressure.",
+      onClick: onDrillTo && cats[0].category?.id ? ()=>onDrillTo({ categoryId:cats[0].category!.id, budgetIds:selBudgets.length?selBudgets:undefined, label:`${cats[0].category?.name||"Other"} expenses` }) : undefined,
     },
     (maxFixedExp || maxVarExp) && {
       icon: "🔝",
@@ -1811,8 +1857,10 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
       tone: "warn",
       tip: "Fixed: largest single fixed-cost transaction (rent, EMI, subscriptions). Variable: largest discretionary transaction — this is where you have the most room to cut.",
       rows: [
-        ...(maxFixedExp ? [{ icon:"📌", label:"Fixed",    amount:fmt(Number(maxFixedExp.amount)), detail:maxFixedExp.title,  rowTone:"sky"  }] : []),
-        ...(maxVarExp   ? [{ icon:"📊", label:"Variable", amount:fmt(Number(maxVarExp.amount)),   detail:maxVarExp.title,    rowTone:"warn" }] : []),
+        ...(maxFixedExp ? [{ icon:"📌", label:"Fixed",    amount:fmt(Number(maxFixedExp.amount)), detail:maxFixedExp.title,  rowTone:"sky",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"fixed", startDate:maxFixedExp.date.slice(0,10), endDate:maxFixedExp.date.slice(0,10), budgetIds:selBudgets.length?selBudgets:undefined, label:"Biggest fixed expense" }) : undefined }] : []),
+        ...(maxVarExp   ? [{ icon:"📊", label:"Variable", amount:fmt(Number(maxVarExp.amount)),   detail:maxVarExp.title,    rowTone:"warn",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"variable", startDate:maxVarExp.date.slice(0,10), endDate:maxVarExp.date.slice(0,10), budgetIds:selBudgets.length?selBudgets:undefined, label:"Biggest variable expense" }) : undefined }] : []),
       ],
     },
     (topFixedDateEntry || topVarDateEntry) && {
@@ -1820,10 +1868,11 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
       label: "top spend date",
       tone: "sky",
       tip: "Fixed: the date with the highest fixed-cost spend. Variable: the date with the highest discretionary spend — tap to drill into those expenses.",
-      onClick: onDrillTo && topVarDateEntry ? () => onDrillTo({ startDate:topVarDateEntry[0], endDate:topVarDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top variable spend date · ${new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined,
       rows: [
-        ...(topFixedDateEntry ? [{ icon:"📌", label:"Fixed",    amount:fmt(topFixedDateEntry[1]), detail:new Date(topFixedDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}), rowTone:"sky"  }] : []),
-        ...(topVarDateEntry   ? [{ icon:"📊", label:"Variable", amount:fmt(topVarDateEntry[1]),   detail:new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}),   rowTone:"warn" }] : []),
+        ...(topFixedDateEntry ? [{ icon:"📌", label:"Fixed",    amount:fmt(topFixedDateEntry[1]), detail:new Date(topFixedDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}), rowTone:"sky",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"fixed", startDate:topFixedDateEntry[0], endDate:topFixedDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top fixed spend · ${new Date(topFixedDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
+        ...(topVarDateEntry   ? [{ icon:"📊", label:"Variable", amount:fmt(topVarDateEntry[1]),   detail:new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}),   rowTone:"warn",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"variable", startDate:topVarDateEntry[0], endDate:topVarDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top variable spend · ${new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
       ],
     },
   ] as (false|InsightItem)[]).filter((x): x is InsightItem => !!x);
@@ -1870,16 +1919,21 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:10 }}>
           {[
             { label:"Total (all)",    value:fmtS(total),         sub:`${txCount} transactions`,             tone:"primary", tip:"All expenses combined — fixed + variable." },
-            { label:"Fixed costs",    value:fmtS(fixedTotal),    sub:`${fixedExp.length} transactions`,     tone:"sky",     tip:"Predictable, recurring expenses like rent, EMI, or subscriptions. Hard to reduce short-term." },
-            { label:"Variable costs", value:fmtS(variableTotal), sub:`${variableExp.length} transactions`,  tone:"warn",    tip:"Discretionary or irregular expenses. This is where you have the most room to cut." },
+            { label:"Fixed costs",    value:fmtS(fixedTotal),    sub:`${fixedExp.length} transactions`,     tone:"sky",     tip:"Predictable, recurring expenses like rent, EMI, or subscriptions. Hard to reduce short-term.",
+              onClick: onDrillTo && fixedExp.length > 0 ? ()=>onDrillTo!({ costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:"Fixed expenses" }) : undefined },
+            { label:"Variable costs", value:fmtS(variableTotal), sub:`${variableExp.length} transactions`,  tone:"warn",    tip:"Discretionary or irregular expenses. This is where you have the most room to cut.",
+              onClick: onDrillTo && variableExp.length > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
             { label:"Variable share", value:total>0?`${Math.round(variableTotal/total*100)}%`:"—",
               sub:`${fmt(variableTotal)} of ${fmt(total)}`, tone: total>0&&variableTotal/total>0.7?"danger":"sage",
-              tip:"What percentage of your total spend is variable (controllable). Above 70% means most of your spending is flexible — you have leverage to reduce it." },
+              tip:"What percentage of your total spend is variable (controllable). Above 70% means most of your spending is flexible — you have leverage to reduce it.",
+              onClick: onDrillTo && variableExp.length > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
           ].map(s=>(
-            <div key={s.label} style={{ borderRadius:14, background:toneS[s.tone], border:`1px solid ${toneC[s.tone]}33`, padding:"12px 14px" }}>
+            <div key={s.label} onClick={s.onClick}
+              style={{ borderRadius:14, background:toneS[s.tone], border:`1px solid ${toneC[s.tone]}33`, padding:"12px 14px", cursor:s.onClick?"pointer":"default" }}>
               <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:4 }}>
                 <p style={{ fontSize:10, color:toneC[s.tone], fontWeight:700, textTransform:"uppercase", letterSpacing:".04em", flex:1 }}>{s.label}</p>
                 <InfoTip text={s.tip} />
+                {s.onClick && <span style={{ fontSize:11, color:toneC[s.tone] }}>→</span>}
               </div>
               <p style={{ fontSize:mobile?16:20, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.value}</p>
               <p style={{ fontSize:10, color:T.faint, marginTop:2 }}>{s.sub}</p>
@@ -1889,12 +1943,20 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         {/* Avg per tx split */}
         {fixedExp.length > 0 && variableExp.length > 0 && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:10 }}>
-            <div style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}` }}>
-              <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg fixed / tx</p>
+            <div onClick={onDrillTo ? ()=>onDrillTo!({ costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:"Fixed expenses" }) : undefined}
+              style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}`, cursor:onDrillTo?"pointer":"default" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg fixed / tx</p>
+                {onDrillTo && <span style={{ fontSize:11, color:T.muted }}>→</span>}
+              </div>
               <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(fixedTotal/fixedExp.length)}</p>
             </div>
-            <div style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}` }}>
-              <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg variable / tx</p>
+            <div onClick={onDrillTo ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined}
+              style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}`, cursor:onDrillTo?"pointer":"default" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg variable / tx</p>
+                {onDrillTo && <span style={{ fontSize:11, color:T.muted }}>→</span>}
+              </div>
               <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(variableTotal/variableExp.length)}</p>
             </div>
           </div>
@@ -1905,11 +1967,12 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     {/* Stats grid — 2×2 on mobile, 4-col on desktop */}
     <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:12, marginBottom:18 }}>
       {stats.map(s=>(
-        <Card key={s.label} style={{ padding:"14px 16px" }}>
+        <Card key={s.label} style={{ padding:"14px 16px" }} onClick={s.onClick}>
           <div style={{ width:34, height:34, borderRadius:10, background:toneS[s.tone], display:"grid", placeItems:"center", fontSize:17, marginBottom:9 }}>{s.icon}</div>
           <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-            <p style={{ fontSize:11, color:T.muted }}>{s.label}</p>
+            <p style={{ fontSize:11, color:T.muted, flex:1 }}>{s.label}</p>
             {s.tip && <InfoTip text={s.tip} />}
+            {s.onClick && <span style={{ fontSize:11, color:toneC[s.tone] }}>→</span>}
           </div>
           <p style={{ fontWeight:800, fontSize:mobile?18:22, color:T.ink, marginTop:3 }}>{s.value}</p>
         </Card>
@@ -1934,12 +1997,13 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
             {ins.rows ? (
               <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
                 {ins.rows.map((row, ri) => (
-                  <div key={ri}>
+                  <div key={ri} onClick={row.onClick ? e=>{e.stopPropagation();row.onClick!();} : undefined} style={{ cursor:row.onClick?"pointer":"default", borderRadius:8, padding:row.onClick?"2px 0":0 }}>
                     {ri > 0 && <div style={{ height:1, background:T.line, margin:"7px 0" }} />}
                     <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:6 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:3, minWidth:0 }}>
                         <span style={{ fontSize:11, flexShrink:0 }}>{row.icon}</span>
                         <span style={{ fontSize:9, fontWeight:700, color:toneC[row.rowTone], textTransform:"uppercase", letterSpacing:".05em", whiteSpace:"nowrap" }}>{row.label}</span>
+                        {row.onClick && <span style={{ fontSize:9, color:toneC[row.rowTone] }}>→</span>}
                       </div>
                       <span style={{ fontSize:mobile?13:14, fontWeight:800, color:T.ink, flexShrink:0 }}>{row.amount}</span>
                     </div>
@@ -1967,14 +2031,32 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         </div>
         <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:12 }}>
           {behaviourStats.map(s=>(
-            <Card key={s.label} style={{ padding:"14px 16px" }}>
+            <Card key={s.label} style={{ padding:"14px 16px" }} onClick={s.rows ? undefined : s.onClick}>
               <div style={{ width:34, height:34, borderRadius:10, background:toneS[s.tone], display:"grid", placeItems:"center", fontSize:17, marginBottom:9 }}>{s.icon}</div>
               <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-                <p style={{ fontSize:11, color:T.muted }}>{s.label}</p>
+                <p style={{ fontSize:11, color:T.muted, flex:1 }}>{s.label}</p>
                 <InfoTip text={s.tip} />
+                {!s.rows && s.onClick && <span style={{ fontSize:11, color:toneC[s.tone] }}>→</span>}
               </div>
               <p style={{ fontWeight:800, fontSize:mobile?18:22, color:T.ink, marginTop:3 }}>{s.value}</p>
               {s.sub && <p style={{ fontSize:10, color:T.faint, marginTop:2 }}>{s.sub}</p>}
+              {s.rows && (
+                <div style={{ marginTop:10, borderTop:`1px solid ${T.line}`, paddingTop:8, display:"flex", flexDirection:"column", gap:6 }}>
+                  {s.rows.map((row,ri)=>(
+                    <div key={ri} onClick={row.onClick ? e=>{e.stopPropagation();row.onClick!();} : undefined}
+                      style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6,
+                               cursor:row.onClick?"pointer":"default", borderRadius:8, padding:"4px 6px",
+                               background:row.onClick?toneS[row.tone]:"transparent", border:row.onClick?`1px solid ${toneC[row.tone]}33`:"none" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                        <span style={{ fontSize:11 }}>{row.icon}</span>
+                        <span style={{ fontSize:10, fontWeight:700, color:toneC[row.tone], textTransform:"uppercase", letterSpacing:".04em" }}>{row.label}</span>
+                        {row.onClick && <span style={{ fontSize:9, color:toneC[row.tone] }}>→</span>}
+                      </div>
+                      <span style={{ fontSize:12, fontWeight:800, color:T.ink }}>{row.amount}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Card>
           ))}
         </div>
@@ -2008,26 +2090,28 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     {expSet.length > 0 && (
       <Card style={{ marginBottom:18 }}>
         <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:4 }}>Spending by day of week</span>
-        <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>Which days you spend the most</p>
-        <ResponsiveContainer width="100%" height={mobile?130:170}>
-          <BarChart data={dowData} barSize={mobile?26:36} style={{ cursor:"pointer" }}>
+        <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>Fixed vs variable spend per day</p>
+        <ResponsiveContainer width="100%" height={mobile?140:180}>
+          <BarChart data={dowData} barSize={mobile?11:16} barGap={2} barCategoryGap="25%" style={{ cursor:"pointer" }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} vertical={false} />
             <XAxis dataKey="day" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
             <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} width={40} />
-            <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
-            <Bar dataKey="total" name="Spent" radius={[5,5,0,0]}
-              onClick={(barData:{day:string;total:number;count:number})=>{
+            <Tooltip formatter={(v:unknown, name:string)=>[fmt(Number(v)), name]} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
+            <Legend iconType="circle" iconSize={8} wrapperStyle={{fontSize:11,paddingTop:8}} />
+            <Bar dataKey="fixed" name="Fixed" fill={T.sky} radius={[4,4,0,0]}
+              onClick={(barData:{day:string})=>{
                 const dowIdx = DOW.indexOf(barData.day);
-                onDrillTo?.({ dayOfWeek:dowIdx, budgetIds:selBudgets.length?selBudgets:undefined, label:`${barData.day} expenses` });
-              }}>
-              {dowData.map((d,i)=>(
-                <Cell key={i} fill={d.day===topDow.day?T.primary:T.primary+"55"} />
-              ))}
-            </Bar>
+                onDrillTo?.({ dayOfWeek:dowIdx, costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:`${barData.day} fixed expenses` });
+              }} />
+            <Bar dataKey="variable" name="Variable" fill={T.warn} radius={[4,4,0,0]}
+              onClick={(barData:{day:string})=>{
+                const dowIdx = DOW.indexOf(barData.day);
+                onDrillTo?.({ dayOfWeek:dowIdx, costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:`${barData.day} variable expenses` });
+              }} />
           </BarChart>
         </ResponsiveContainer>
-        <p style={{ fontSize:11, color:T.muted, marginTop:10 }}>
-          Highest: <span style={{ fontWeight:700, color:T.ink }}>{topDow.day}</span> · {fmt(topDow.total)} across {topDow.count} transaction{topDow.count!==1?"s":""}
+        <p style={{ fontSize:11, color:T.muted, marginTop:6 }}>
+          Highest total: <span style={{ fontWeight:700, color:T.ink }}>{topDow.day}</span> · {fmt(topDow.fixed)} fixed + {fmt(topDow.variable)} variable · {topDow.count} tx
         </p>
       </Card>
     )}
@@ -2231,14 +2315,40 @@ const PAGE_TITLE: Record<string,string> = {
 
 function AppShell() {
   const mobile = useMobile();
-  const [route, setRoute] = useState(()=>localStorage.getItem("sw_route")||"dashboard");
+  const [route, setRoute] = useState(() => {
+    const hash = window.location.hash.slice(1);
+    if (hash && PAGE_TITLE[hash]) return hash;
+    return localStorage.getItem("sw_route") || "dashboard";
+  });
   const [expModal, setExpModal] = useState<{open:boolean; expense?:Expense}>({open:false});
   const [showMore, setShowMore] = useState(false);
   const [expNavFilters, setExpNavFilters] = useState<NavFilters|null>(null);
 
-  const goTo = (r:string) => { setRoute(r); localStorage.setItem("sw_route",r); window.scrollTo(0,0); setShowMore(false); };
+  const goTo = (r:string) => {
+    setRoute(r);
+    localStorage.setItem("sw_route", r);
+    window.history.pushState({ route: r }, '', '#' + r);
+    window.scrollTo(0, 0);
+    setShowMore(false);
+  };
   const openExpense = (e?:Expense) => setExpModal({open:true, expense:e});
   const drillTo = (f:NavFilters) => { setExpNavFilters(f); goTo("expenses"); };
+
+  useEffect(() => {
+    window.history.replaceState({ route }, '', '#' + route);
+    const onPop = (e: PopStateEvent) => {
+      const r = (e.state?.route as string) || window.location.hash.slice(1) || "dashboard";
+      const valid = PAGE_TITLE[r] ? r : "dashboard";
+      setRoute(valid);
+      localStorage.setItem("sw_route", valid);
+      setExpModal({ open: false });
+      setShowMore(false);
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const screens: Record<string,React.ReactNode> = {
     dashboard:       <Dashboard onAdd={openExpense} goTo={goTo} />,
