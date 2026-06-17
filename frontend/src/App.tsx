@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { analyticsApi } from "./api/analytics";
+import React, { useState, useEffect, useRef } from "react";
 import { expensesApi } from "./api/expenses";
-import type { Expense, Budget, Category, PaymentSource, AnalyticsSummary, SplitTender, BudgetSplitTenderAllocation } from "./types";
+import type { Expense, Budget, Category, PaymentSource, SplitTender, BudgetSplitTenderAllocation } from "./types";
 import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
@@ -257,6 +256,50 @@ function InfoTip({ text }: { text: string }) {
   );
 }
 
+// Threshold alert popover — wraps a "⚠️ threshold" badge; hover or click to reveal which tenders hit their alert
+function ThresholdInfo({ alerts, children }: { alerts: BudgetSplitTenderAllocation[]; children: React.ReactNode }) {
+  const [pos, setPos] = useState<{x:number;y:number}|null>(null);
+  const [pinned, setPinned] = useState(false);
+  if (alerts.length === 0) return <>{children}</>;
+
+  const locate = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setPos({ x: Math.min(r.left, window.innerWidth - 268), y: r.bottom + 6 });
+  };
+  const onEnter = (e: React.MouseEvent) => { if (!pinned) locate(e.currentTarget as HTMLElement); };
+  const onLeave = () => { if (!pinned) setPos(null); };
+  const onClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (pinned) { setPinned(false); setPos(null); }
+    else { setPinned(true); locate(e.currentTarget as HTMLElement); }
+  };
+
+  return (
+    <span onMouseEnter={onEnter} onMouseLeave={onLeave} onClick={onClick}
+      style={{ display:"inline-flex", alignItems:"center", cursor:"pointer" }}>
+      {children}
+      {pos && <>
+        {pinned && <div onClick={e=>{ e.stopPropagation(); setPinned(false); setPos(null); }}
+          style={{ position:"fixed", inset:0, zIndex:998 }} />}
+        <div style={{ position:"fixed", left:pos.x, top:pos.y, zIndex:999,
+          background:T.ink, color:"#fff", borderRadius:10, padding:"10px 12px",
+          fontSize:12, lineHeight:1.45, width:256, boxShadow:"0 4px 20px rgba(0,0,0,.25)" }}>
+          <p style={{ fontWeight:700, marginBottom:4 }}>⚠️ Threshold{alerts.length>1?"s":""} reached</p>
+          {alerts.map(ta => {
+            const pct = ta.allocatedAmount ? Math.round((ta.spentAmount/ta.allocatedAmount)*100) : 0;
+            return (
+              <div key={ta.splitTenderId} style={{ marginTop:6 }}>
+                <p style={{ fontWeight:600 }}>{ta.splitTenderName}</p>
+                <p style={{ color:"#ffffffcc" }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)} ({pct}%) · alert at {ta.threshold}%</p>
+              </div>
+            );
+          })}
+        </div>
+      </>}
+    </span>
+  );
+}
+
 // Inline filter select (no label, compact)
 function FSel({ value, onChange, children }: { value:string; onChange:(v:string)=>void; children:React.ReactNode }) {
   return <div style={{ position:"relative" }}>
@@ -294,23 +337,22 @@ const NAV = [
 // ── DASHBOARD ─────────────────────────────────────────────────────────────
 function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const mobile = useMobile();
-  const { budgets, budgetsLoading, recentExpenses } = useData();
-  const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
-  const [trendData, setTrend] = useState<{month:string;spend:number}[]>([]);
+  const { budgets, budgetsLoading } = useData();
+  const [scopedExp, setScopedExp] = useState<Expense[]>([]);
   const [selBudgetId, setSelBudgetId] = useState("");
-
-  useEffect(() => {
-    analyticsApi.getSummary().then(r=>setSummary(r.data)).catch(console.error);
-    analyticsApi.getMonthlyTrend().then(r=>{
-      setTrend(r.data.slice(0,6).reverse().map(d=>({
-        month:["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.month],
-        spend:d.total,
-      })));
-    }).catch(console.error);
-  }, []);
 
   const active = budgets.filter(b => b.status === "active");
   const selectedBudget = selBudgetId ? active.find(b => b.id === selBudgetId) : null;
+
+  // Spending data is scoped to the selected budget, or all active budgets by default
+  useEffect(() => {
+    const ids = selBudgetId ? [selBudgetId] : active.map(b => b.id);
+    if (ids.length === 0) { setScopedExp([]); return; }
+    Promise.all(ids.map(id => expensesApi.getAll({ budgetId:id, limit:1000 }).then(r=>r.data??[])))
+      .then(arrs => setScopedExp(arrs.flat()))
+      .catch(console.error);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selBudgetId, budgets]);
 
   // Aggregate or single-budget metrics
   const totalBud = active.reduce((s,b) => s + Number(b.amount || 0), 0);
@@ -328,9 +370,22 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
   const overviewTone = overBudget > 0 ? "danger" : alertedTenders.length > 0 ? "warn" : h.tone;
 
-  const filteredRecent = selBudgetId
-    ? recentExpenses.filter(e => e.budgetId === selBudgetId)
-    : recentExpenses;
+  // Category breakdown, recent list, and monthly trend — all from the scoped expenses
+  const cats = computeCategoryBreakdown(scopedExp);
+  const filteredRecent = [...scopedExp]
+    .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5);
+
+  const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const trendMap = new Map<string, number>();
+  for (const e of scopedExp) {
+    const k = e.date.slice(0, 7);
+    trendMap.set(k, (trendMap.get(k) || 0) + Number(e.amount));
+  }
+  const trendData = [...trendMap.keys()].sort().slice(-6).map(k => {
+    const [, m] = k.split("-").map(Number);
+    return { month: MONTHS[m], spend: trendMap.get(k)! };
+  });
 
   if (budgetsLoading) return <Spinner />;
 
@@ -342,7 +397,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
           <option value="">All budgets</option>
           {active.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
         </FSel>
-        {!mobile && <Btn size="lg" onClick={onAdd}>+ Add expense</Btn>}
+        {!mobile && <Btn size="lg" onClick={()=>onAdd()}>+ Add expense</Btn>}
       </div>
     </div>
 
@@ -382,9 +437,11 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
               : `of ${fmt(totalBud)} across ${active.length} active budgets`}
           </p>
         </div>
-        <Badge tone={overviewTone}>
-          {overBudget > 0 ? "Over budget" : alertedTenders.length > 0 ? `⚠️ ${alertedTenders.length} threshold` : h.label}
-        </Badge>
+        <ThresholdInfo alerts={overBudget > 0 ? [] : alertedTenders}>
+          <Badge tone={overviewTone}>
+            {overBudget > 0 ? "Over budget" : alertedTenders.length > 0 ? `⚠️ ${alertedTenders.length} threshold` : h.label}
+          </Badge>
+        </ThresholdInfo>
       </div>
       <div style={{ marginTop:20 }}>
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, fontWeight:600, color:T.muted, marginBottom:7 }}>
@@ -466,9 +523,11 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
                       {b.description && <p style={{ fontSize:11, color:T.muted }}>{b.description}</p>}
                     </div>
                   </div>
-                  <Badge tone={cardTone}>
-                    {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold` : hh.label}
-                  </Badge>
+                  <ThresholdInfo alerts={over > 0 ? [] : budgetAlerts}>
+                    <Badge tone={cardTone}>
+                      {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold` : hh.label}
+                    </Badge>
+                  </ThresholdInfo>
                 </div>
                 <div style={{
                   display:"flex", justifyContent:"space-between", alignItems:"flex-end",
@@ -565,17 +624,17 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
     {/* Pie + Recent */}
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:18, marginBottom:18 }}>
-      {summary && summary.categoryBreakdown.length>0 && (
+      {cats.length>0 && (
         <Card>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14 }}>
-            <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>By category<KpiInfo text="How your total spending is divided across your expense categories." /></span>
+            <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>By category<KpiInfo text="How your spending across the selected budget(s) is divided between expense categories." /></span>
             <button onClick={()=>goTo("analytics")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>Details →</button>
           </div>
           <ResponsiveContainer width="100%" height={160}>
             <PieChart>
-              <Pie data={summary.categoryBreakdown.map(c=>({name:c.category?.name||"Other",value:c.total}))}
+              <Pie data={cats.map(c=>({name:c.category?.name||"Other",value:c.total}))}
                 cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={3}>
-                {summary.categoryBreakdown.map((_c,i)=>(
+                {cats.map((_c,i)=>(
                   <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
@@ -583,7 +642,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
             </PieChart>
           </ResponsiveContainer>
           <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 14px", marginTop:10 }}>
-            {summary.categoryBreakdown.slice(0,8).map((c,i)=>(
+            {cats.slice(0,8).map((c,i)=>(
               <div key={i} style={{ display:"flex", alignItems:"center", gap:5 }}>
                 <div style={{ width:8, height:8, borderRadius:99, background:CHART_PALETTE[i%CHART_PALETTE.length], flexShrink:0 }} />
                 <span style={{ fontSize:11, color:T.muted }}>{c.category?.name||"Other"}</span>
@@ -1100,9 +1159,11 @@ function BudgetsScreen() {
                 <p style={{ fontSize:11, color:T.faint, marginTop:2 }}>{toDateStr(b.startDate)} → {toDateStr(b.endDate)}</p>
               </div>
               <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-                <Badge tone={rowTone}>
-                  {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold` : hh.label}
-                </Badge>
+                <ThresholdInfo alerts={over > 0 ? [] : budgetAlerts}>
+                  <Badge tone={rowTone}>
+                    {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold` : hh.label}
+                  </Badge>
+                </ThresholdInfo>
                 <IconBtn icon="✏️" onClick={()=>setModal({open:true,budget:b})} tone="primary" />
                 <IconBtn icon="🗑️" onClick={()=>deleteBudget(b.id)} tone="danger" />
               </div>
@@ -1649,55 +1710,57 @@ function SplitTendersScreen() {
 function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const mobile = useMobile();
   const { budgets } = useData();
-  const [summary, setSummary]         = useState<AnalyticsSummary|null>(null);
-  const [monthly, setMonthly]         = useState<{month:string;year:number;monthNum:number;spend:number;count:number}[]>([]);
-  const [loading, setLoading]         = useState(true);
   const [error,   setError]           = useState("");
   const [selBudgets, setSelBudgets]   = useState<string[]>([]);
   const [filteredExp, setFilteredExp] = useState<Expense[]|null>(null);
   const [expLoading, setExpLoading]   = useState(false);
-  const [allExp, setAllExp]           = useState<Expense[]>([]);
+  const didInit = useRef(false);
 
   const activeBudgets = budgets.filter(b => b.status === "active");
 
+  // Default to the first active budget once budgets have loaded
   useEffect(()=>{
-    Promise.all([analyticsApi.getSummary(), analyticsApi.getMonthlyTrend()])
-      .then(([s,m])=>{
-        setSummary(s.data);
-        setMonthly(m.data.slice(0,6).reverse().map(d=>({
-          month:["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.month],
-          year:d.year, monthNum:d.month,
-          spend:d.total, count:d.count,
-        })));
-      }).catch(e=>setError(e instanceof Error?e.message:"Error"))
-       .finally(()=>setLoading(false));
-    expensesApi.getAll({ limit:1000, sortBy:"date", order:"desc" })
-      .then(r=>setAllExp(r.data??[]))
-      .catch(console.error);
-  }, []);
+    if (!didInit.current && activeBudgets.length > 0) {
+      didInit.current = true;
+      setSelBudgets([activeBudgets[0].id]);
+    }
+  }, [activeBudgets]);
 
   useEffect(()=>{
     if (selBudgets.length === 0) { setFilteredExp(null); return; }
     setExpLoading(true);
     Promise.all(selBudgets.map(id=>expensesApi.getAll({ budgetId:id, limit:1000 }).then(r=>r.data??[])))
       .then(arrs=>setFilteredExp(arrs.flat()))
-      .catch(console.error)
+      .catch(e=>setError(e instanceof Error?e.message:"Error"))
       .finally(()=>setExpLoading(false));
   }, [selBudgets]);
 
   const toggleBudget = (id:string) => setSelBudgets(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
 
-  if (loading) return <Spinner />;
-  if (error)   return <ErrMsg msg={error} />;
-  if (!summary) return null;
+  if (error) return <ErrMsg msg={error} />;
 
-  const cats    = filteredExp ? computeCategoryBreakdown(filteredExp) : summary.categoryBreakdown;
-  const srcs    = filteredExp ? computeSourceBreakdown(filteredExp)   : summary.sourceBreakdown;
-  const total   = filteredExp ? filteredExp.reduce((s,e)=>s+Number(e.amount),0) : summary.totalSpent;
-  const txCount = filteredExp ? filteredExp.length : summary.totalTransactions;
+  // All metrics are scoped to the selected budget(s); no selection → no data
+  const scoped  = filteredExp ?? [];
+  const cats    = computeCategoryBreakdown(scoped);
+  const srcs    = computeSourceBreakdown(scoped);
+  const total   = scoped.reduce((s,e)=>s+Number(e.amount),0);
+  const txCount = scoped.length;
+  const expSet  = scoped;
 
-  // Expense set for deep metrics: prefer filtered, fall back to all-time load
-  const expSet = filteredExp ?? allExp;
+  // Monthly trend computed from the selected budgets' expenses (last 6 months)
+  const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const monthlyMap = new Map<string,{spend:number;count:number}>();
+  for (const e of scoped) {
+    const k  = e.date.slice(0,7);
+    const ex = monthlyMap.get(k);
+    if (ex) { ex.spend += Number(e.amount); ex.count++; }
+    else monthlyMap.set(k, { spend:Number(e.amount), count:1 });
+  }
+  const monthly = [...monthlyMap.keys()].sort().slice(-6).map(k=>{
+    const [y,m] = k.split("-").map(Number);
+    const v = monthlyMap.get(k)!;
+    return { month:MONTHS[m], year:y, monthNum:m, spend:v.spend, count:v.count };
+  });
 
   // Fixed vs variable split
   const fixedExp    = expSet.filter(e => e.costType === "fixed");
@@ -1909,6 +1972,24 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
 
     {expLoading && <Spinner />}
 
+    {/* No budget selected → no data */}
+    {!expLoading && selBudgets.length === 0 && (
+      <Card style={{ padding:"44px 20px", textAlign:"center" }}>
+        <p style={{ fontSize:30, marginBottom:8 }}>📊</p>
+        <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No budget selected</p>
+        <p style={{ fontSize:13, color:T.muted }}>Select a budget above to view its analytics.</p>
+      </Card>
+    )}
+
+    {/* Budget selected but no expenses */}
+    {!expLoading && selBudgets.length > 0 && expSet.length === 0 && (
+      <Card style={{ padding:"44px 20px", textAlign:"center" }}>
+        <p style={{ fontSize:30, marginBottom:8 }}>🗒️</p>
+        <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No expenses yet</p>
+        <p style={{ fontSize:13, color:T.muted }}>The selected budget{selBudgets.length>1?"s have":" has"} no expenses to analyze.</p>
+      </Card>
+    )}
+
     {/* Cost type split */}
     {expSet.length > 0 && (
       <Card style={{ marginBottom:18 }}>
@@ -1965,6 +2046,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Stats grid — 2×2 on mobile, 4-col on desktop */}
+    {expSet.length > 0 && (
     <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:12, marginBottom:18 }}>
       {stats.map(s=>(
         <Card key={s.label} style={{ padding:"14px 16px" }} onClick={s.onClick}>
@@ -1978,9 +2060,10 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         </Card>
       ))}
     </div>
+    )}
 
     {/* Insight chips — 2-col on mobile, auto-fill grid on desktop */}
-    {insights.length > 0 && (
+    {expSet.length > 0 && insights.length > 0 && (
       <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(auto-fill, minmax(200px, 1fr))", gap:mobile?8:10, marginBottom:18 }}>
         {insights.map((ins,i)=>(
           <div key={i} onClick={ins.onClick}
@@ -2064,7 +2147,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Monthly spending chart */}
-    {monthly.length > 0 && !filteredExp && (
+    {monthly.length > 0 && (
       <Card style={{ marginBottom:18 }}>
         <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>Monthly spending</span>
         <ResponsiveContainer width="100%" height={mobile?150:200}>
@@ -2208,12 +2291,22 @@ function ReportsScreen() {
   const [selBudgetId, setSelBudgetId] = useState("");
   const [reportExp, setReportExp]     = useState<Expense[]>([]);
   const [loading, setLoading]         = useState(false);
+  const didInit = useRef(false);
 
   const allBudgets = budgets;
 
+  // Default to the first budget once budgets have loaded
   useEffect(()=>{
+    if (!didInit.current && allBudgets.length > 0) {
+      didInit.current = true;
+      setSelBudgetId(allBudgets[0].id);
+    }
+  }, [allBudgets]);
+
+  useEffect(()=>{
+    if (!selBudgetId) { setReportExp([]); setLoading(false); return; }
     setLoading(true);
-    expensesApi.getAll({ limit:1000, budgetId:selBudgetId||undefined, sortBy:"date", order:"desc" })
+    expensesApi.getAll({ limit:1000, budgetId:selBudgetId, sortBy:"date", order:"desc" })
       .then(r => setReportExp(r.data ?? []))
       .catch(console.error)
       .finally(()=>setLoading(false));
@@ -2245,7 +2338,7 @@ function ReportsScreen() {
         <div style={{ position:"relative", flex:1, minWidth:180 }}>
           <select value={selBudgetId} onChange={e=>setSelBudgetId(e.target.value)}
             style={{ width:"100%", padding:"9px 28px 9px 12px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:13, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
-            <option value="">All budgets</option>
+            <option value="">Select a budget…</option>
             {allBudgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
           <span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
@@ -2253,6 +2346,13 @@ function ReportsScreen() {
       </div>
     </Card>
 
+    {!selBudgetId ? (
+      <Card style={{ padding:"44px 20px", textAlign:"center" }}>
+        <p style={{ fontSize:30, marginBottom:8 }}>📁</p>
+        <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No budget selected</p>
+        <p style={{ fontSize:13, color:T.muted }}>Select a budget above to view its report.</p>
+      </Card>
+    ) : (<>
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))", gap:13, marginBottom:18 }}>
       {[{l:"Total spent",v:fmt(total),t:"primary"},{l:"Transactions",v:String(reportExp.length),t:"sky"},{l:"Avg/transaction",v:fmt(total/Math.max(reportExp.length,1)),t:"sage"}].map(s=>
         <div key={s.l} style={{ borderRadius:16, border:`1px solid ${T.line}`, padding:"14px 16px", background:T.paper }}>
@@ -2288,6 +2388,7 @@ function ReportsScreen() {
         {reportExp.length === 0 && <p style={{ fontSize:13, color:T.muted, padding:8 }}>No expenses found.</p>}
       </Card>
     )}
+    </>)}
   </div>;
 }
 
