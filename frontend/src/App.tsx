@@ -1035,50 +1035,40 @@ const renderBudgetRow = (b: Budget) => {
     const burnMetrics = calcBurnMetrics(amt, used, b.startDate, b.endDate);
     const txCount     = b._count?.expenses;
     const guide       = calcSpendingGuidance(amt, used, b.startDate, b.endDate, txCount);
+    const showGuide   = guide.remainDays > 0 && (p >= 60 || guide.projectedOver > 0 || over > 0);
 
-    // Tenders at risk
-    const atRiskTenders = (b.tenderAnalytics || []).filter(ta => {
-      const tPct = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
-      const isOverThreshold = ta.threshold != null ? tPct >= ta.threshold : tPct >= 90;
-      return isOverThreshold || ta.spentAmount > ta.allocatedAmount;
-    });
+    const GuideTile  = ({ bg=T.paper, border=`1px solid ${T.line}`, label, labelColor=T.muted, value, valueColor=T.ink, sub, tip }: { bg?:string; border?:string; label:string; labelColor?:string; value:string; valueColor?:string; sub:string; tip:string }) => (
+      <div style={{ background:bg, borderRadius:10, padding:mobile?"10px 12px":"12px 14px", border, minWidth: 140, flex: "1 1 auto" }}>
+        <div style={{ display:"flex", alignItems:"flex-start", gap:3, marginBottom:4 }}>
+          <p style={{ fontSize:10, color:labelColor, fontWeight:700, textTransform:"uppercase", letterSpacing:".03em", lineHeight:1.3, flex:1 }}>{label}</p>
+          <InfoTip text={tip} />
+        </div>
+        <p style={{ fontSize:mobile?15:18, fontWeight:800, color:valueColor, lineHeight:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{value}</p>
+        <p style={{ fontSize:10, color:T.faint, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{sub}</p>
+      </div>
+    );
 
     return (
-      <Card key={b.id} style={{ marginBottom: 0, padding: mobile ? "14px 16px" : "16px 20px" }}>
-        {/* Main Row: Info, Progress, Actions */}
-        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", gap: 16, alignItems: mobile ? "flex-start" : "center" }}>
-          
-          {/* Left: Identity */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, width: mobile ? "100%" : "28%", flexShrink: 0 }}>
+      <Card key={b.id} style={{ marginBottom: 0, padding: mobile ? "16px" : "24px 28px", width: "100%" }}>
+        {/* Header Row: Horizontal Layout */}
+        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", gap: 16, justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 6, height: 44, borderRadius: 99, background: b.color || T.primary, flexShrink: 0 }} />
-            <div style={{ minWidth: 0, flex: 1 }}>
+            <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <p style={{ fontSize: 16, fontWeight: 800, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.name}</p>
+                <p style={{ fontSize: 18, fontWeight: 800, color: T.ink }}>{b.name}</p>
                 {b.status !== "active" && <Badge tone="sky">{b.status}</Badge>}
               </div>
-              <p style={{ fontSize: 11, color: T.faint, marginTop: 4 }}>{toDateStr(b.startDate)} → {toDateStr(b.endDate)}</p>
+              <p style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
+                {toDateStr(b.startDate)} → {toDateStr(b.endDate)}
+                {b.description && <span style={{ color: T.faint }}> · {b.description}</span>}
+              </p>
             </div>
           </div>
-
-          {/* Middle: Progress & Amounts */}
-          <div style={{ flex: 1, width: "100%", minWidth: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 8, alignItems: "flex-end" }}>
-              <span style={{ fontWeight: 600, color: T.ink }}>{fmt(used)} spent</span>
-              <div style={{ textAlign: "right" }}>
-                <span style={{ fontWeight: 800, color: over > 0 ? T.danger : T.ink, fontSize: 15 }}>
-                  {over > 0 ? `+${fmt(over)} over` : `${fmt(rem)} left`}
-                </span>
-                <span style={{ color: T.muted, fontSize: 11, marginLeft: 5 }}>of {fmt(amt)}</span>
-              </div>
-            </div>
-            <Progress pct={p} tone={rowTone} h={8} />
-          </div>
-
-          {/* Right: Badges & Actions */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, width: mobile ? "100%" : "auto", justifyContent: mobile ? "space-between" : "flex-end", flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", width: mobile ? "100%" : "auto", justifyContent: mobile ? "space-between" : "flex-end" }}>
             <ThresholdInfo alerts={over > 0 ? [] : budgetAlerts}>
               <Badge tone={rowTone}>
-                {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} alert${budgetAlerts.length > 1 ? 's' : ''}` : hh.label}
+                {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold alert${budgetAlerts.length > 1 ? 's' : ''}` : hh.label}
               </Badge>
             </ThresholdInfo>
             <div style={{ display: "flex", gap: 6 }}>
@@ -1088,57 +1078,141 @@ const renderBudgetRow = (b: Budget) => {
           </div>
         </div>
 
-        {/* Details Row: Horizontal wrap for stats and alerts */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
-          {burnMetrics.filter(m => ["Actual burn rate", "Forecasted end spend", "Runway"].includes(m.label)).map(m => (
-            <div key={m.label} style={{ background: T.cream, border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 12px", flex: "1 1 auto", minWidth: 120 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:2 }}>
-                <p style={{ fontSize: 9, color: T.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>{m.label}</p>
-                <InfoTip text={m.tip} />
-              </div>
-              <p style={{ fontSize: 13, fontWeight: 800, color: m.hi ? T.danger : T.ink }}>{m.value}</p>
+        {/* Progress Bar Row */}
+        <div style={{ marginBottom: 20, padding: "14px 18px", borderRadius: 14, background: toneS[rowTone], border: `1px solid ${toneC[rowTone]}44` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8 }}>
+            <div>
+              <p style={{ fontSize: 11, color: toneC[rowTone], fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>
+                {over > 0 ? "Over budget" : "Remaining"}
+              </p>
+              <p style={{ fontSize: mobile ? 22 : 28, fontWeight: 800, color: toneC[rowTone], lineHeight: 1.1 }}>
+                {over > 0 ? fmt(over) : fmt(rem)}
+              </p>
             </div>
-          ))}
-          {/* Guide Metric */}
-          {guide.remainDays > 0 && p >= 60 && (
-            <div style={{ background: guide.cutNeeded > 0 ? T.warnS : T.sageS, border: `1px solid ${guide.cutNeeded > 0 ? T.warn : T.sage}44`, borderRadius: 10, padding: "8px 12px", flex: "1 1 auto", minWidth: 120 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:2 }}>
-                <p style={{ fontSize: 9, color: guide.cutNeeded > 0 ? T.warn : T.sage, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>Max/day target</p>
-                <InfoTip text="Safe daily limit to avoid exceeding the overall budget." />
-              </div>
-              <p style={{ fontSize: 13, fontWeight: 800, color: guide.cutNeeded > 0 ? T.warn : T.sage }}>{guide.safeDailyLimit > 0 ? `${fmt(guide.safeDailyLimit)}/d` : "₹0"}</p>
+            <div style={{ textAlign: "right" }}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{fmt(used)} spent</p>
+              <p style={{ fontSize: 12, color: T.muted }}>of {fmt(amt)} · {Math.round(p)}% used</p>
             </div>
-          )}
+          </div>
+          <Progress pct={p} tone={rowTone} h={8} />
         </div>
 
-        {/* Tenders At Risk */}
-        {atRiskTenders.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
-            {atRiskTenders.map(ta => {
-              const tOver  = Math.max(0, ta.spentAmount - ta.allocatedAmount);
-              const tRem   = Math.max(0, ta.allocatedAmount - ta.spentAmount);
-              const tPct   = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
-              const tTone  = tOver > 0 ? "danger" : "warn";
-              const tMaxDaily = guide.remainDays > 0 ? tRem / guide.remainDays : 0;
-              
-              return (
-                <div key={ta.splitTenderId} style={{ display: "flex", alignItems: "center", gap: 10, background: toneS[tTone], border: `1px solid ${toneC[tTone]}55`, borderRadius: 10, padding: "8px 12px", flex: "1 1 auto", minWidth: 240 }}>
-                  <span style={{ fontSize: 16 }}>{tOver > 0 ? "🔴" : "⚠️"}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
-                      <p style={{ fontSize: 12, fontWeight: 800, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ta.splitTenderName}</p>
-                      <p style={{ fontSize: 12, fontWeight: 800, color: toneC[tTone] }}>{Math.round(tPct)}% used</p>
+        {/* Metrics Grid (Horizontal wrap for infinite scaling) */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {burnMetrics.map(m => (
+            <div key={m.label} style={{ background: T.cream, border: `1px solid ${T.line}`, borderRadius: 10, padding: "10px 12px", flex: "1 1 auto", minWidth: 150 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 4, marginBottom: 4 }}>
+                <p style={{ fontSize: 10, color: T.muted, textTransform: "uppercase", letterSpacing: ".03em", flex: 1 }}>{m.label}</p>
+                <InfoTip text={m.tip} />
+              </div>
+              <p style={{ fontSize: 15, fontWeight: 800, color: m.hi ? T.danger : T.ink }}>{m.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Guidance Block */}
+        {showGuide && (() => {
+          const alertColor = guide.projectedOver > 0 || over > 0 ? T.danger : T.warn;
+          const alertBg    = guide.projectedOver > 0 || over > 0 ? T.dangerS : T.warnS;
+          return (
+            <div style={{ marginTop: 14, borderRadius: 12, border: `1.5px solid ${alertColor}44`, background: alertBg, padding: mobile ? "14px" : "18px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: alertColor }}>🎯 Spending limits to stay on budget</span>
+                <InfoTip text="These figures show how much you can afford to spend going forward without exceeding your total budget by the end date." />
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                <GuideTile label="Max per day" labelColor={guide.cutNeeded > 0 ? T.danger : T.sage} value={guide.safeDailyLimit > 0 ? `${fmt(guide.safeDailyLimit)}/d` : "₹0"} valueColor={guide.cutNeeded > 0 ? T.danger : T.sage} sub={`${Math.round(guide.remainDays)} days left`} tip="Stay at or below this daily to avoid going over budget." />
+                <GuideTile label="Max per week" value={guide.safeWeeklyLimit > 0 ? fmt(guide.safeWeeklyLimit) : "₹0"} sub="weekly target" tip="Safe daily limit × 7." />
+                {guide.cutNeeded > 0 && <GuideTile bg={T.warnS} border={`1px solid ${T.warn}44`} label="Reduce daily by" labelColor={T.warn} value={`${fmt(guide.cutNeeded)}/d`} valueColor={T.warn} sub={`vs ${fmt(guide.actualBurn)}/d pace`} tip={`Cut by ${fmt(guide.cutNeeded)}/day to reach safe limit.`} />}
+                {guide.projectedOver > 0 && <GuideTile bg={T.dangerS} border={`1px solid ${T.danger}44`} label="Overshoot risk" labelColor={T.danger} value={`+${fmt(guide.projectedOver)}`} valueColor={T.danger} sub="at current pace" tip="If you keep spending at today's rate, you will exceed total budget." />}
+                <GuideTile bg={guide.paceGap > 15 ? T.dangerS : guide.paceGap > 5 ? T.warnS : T.sageS} border={`1px solid ${guide.paceGap > 15 ? T.danger : guide.paceGap > 5 ? T.warn : T.sage}44`} label="Pace vs plan" labelColor={guide.paceGap > 15 ? T.danger : guide.paceGap > 5 ? T.warn : T.sage} value={`${guide.paceGap >= 0 ? "+" : ""}${guide.paceGap.toFixed(0)}%`} valueColor={guide.paceGap > 5 ? T.danger : T.sage} sub={`${Math.round(guide.pctBudgetUsed)}% budget · ${Math.round(guide.pctTimeElapsed)}% time`} tip="Positive = spending ahead of pace." />
+                {guide.txsRemaining !== null && <GuideTile label="Purchases left" value={`~${guide.txsRemaining}`} sub={`avg ${fmt(guide.avgTx)}/tx`} tip={`Based on your avg transaction of ${fmt(guide.avgTx)}.`} />}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* At-Risk Split Tenders */}
+        {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (() => {
+          const atRisk = b.tenderAnalytics!.filter(ta => {
+            const tPct = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+            return (ta.threshold != null ? tPct >= ta.threshold : tPct >= 90) || ta.spentAmount > ta.allocatedAmount;
+          });
+          if (atRisk.length === 0) return null;
+          
+          return (
+            <div style={{ marginTop: 20 }}>
+              <p style={{ fontSize: 12, fontWeight: 700, color: T.danger, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>⚠️ At Risk Payment Tenders</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {atRisk.map(ta => {
+                  const tOver  = Math.max(0, ta.spentAmount - ta.allocatedAmount);
+                  const tRem   = Math.max(0, ta.allocatedAmount - ta.spentAmount);
+                  const tPct   = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+                  const tShare = used > 0 ? (ta.spentAmount / used) * 100 : 0;
+                  const tTone  = tOver > 0 ? "danger" : "warn";
+                  const tMaxDaily = guide.remainDays > 0 ? tRem / guide.remainDays : 0;
+                  
+                  return (
+                    <div key={ta.splitTenderId} style={{ background: toneS[tTone], borderRadius: 12, padding: "14px", border: `1px solid ${toneC[tTone]}44`, flex: "1 1 auto", minWidth: 260 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                        <span style={{ fontSize: 16 }}>{tOver > 0 ? "🔴" : "⚠️"}</span>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: toneC[tTone], flex: 1 }}>{ta.splitTenderName}</span>
+                        <span style={{ fontSize: 12, color: T.ink, fontWeight: 700 }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)}</span>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                        <div style={{ minWidth: 0, flex: "1 1 80px" }}>
+                          <p style={{ fontSize: 10, color: toneC[tTone], fontWeight: 700, textTransform: "uppercase" }}>{tOver > 0 ? "Over Limit" : "Remaining"}</p>
+                          <p style={{ fontSize: 15, fontWeight: 800, color: toneC[tTone] }}>{tOver > 0 ? `+${fmt(tOver)}` : fmt(tRem)}</p>
+                        </div>
+                        <div style={{ minWidth: 0, flex: "1 1 80px" }}>
+                          <p style={{ fontSize: 10, color: T.muted, fontWeight: 700, textTransform: "uppercase" }}>Spend Share</p>
+                          <p style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>{Math.round(tShare)}%</p>
+                        </div>
+                        <div style={{ minWidth: 0, flex: "1 1 80px" }}>
+                          <p style={{ fontSize: 10, color: T.muted, fontWeight: 700, textTransform: "uppercase" }}>Alloc. Used</p>
+                          <p style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>{Math.round(tPct)}%</p>
+                        </div>
+                        {guide.remainDays > 0 && tRem > 0 && (
+                          <div style={{ minWidth: 0, flex: "1 1 80px" }}>
+                            <p style={{ fontSize: 10, color: T.muted, fontWeight: 700, textTransform: "uppercase" }}>Max/day</p>
+                            <p style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>{fmt(tMaxDaily)}/d</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 6, marginTop: 3 }}>
-                      <p style={{ fontSize: 11, color: T.muted }}>{tOver > 0 ? `+${fmt(tOver)} over` : `${fmt(tRem)} left`}</p>
-                      {guide.remainDays > 0 && tRem > 0 && (
-                        <p style={{ fontSize: 11, color: T.ink, fontWeight: 700 }}>Max {fmt(tMaxDaily)}/d</p>
-                      )}
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* All Tenders Progress Bars (Horizontal Grid) */}
+        {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (
+          <div style={{ marginTop: 24, paddingTop: 18, borderTop: `1px solid ${T.line}` }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 12 }}>Tender Allocation Status</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "16px 32px" }}>
+              {b.tenderAnalytics.map(ta => {
+                const tp    = ta.allocatedAmount ? (ta.spentAmount/ta.allocatedAmount)*100 : 0;
+                const tRem  = Math.max(0, ta.allocatedAmount - ta.spentAmount);
+                const tOver = Math.max(0, ta.spentAmount - ta.allocatedAmount);
+                const al    = isTenderAlerted(ta);
+                const tTone = tOver > 0 ? "danger" : al ? "warn" : health(tp).tone;
+                return (
+                  <div key={ta.splitTenderId} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: toneC[tTone] || T.ink, width: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {tOver > 0 ? "🔴" : al ? "⚠️" : "🗂️"} {ta.splitTenderName}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}><Progress pct={tp} tone={tTone} h={6} /></div>
+                    <div style={{ textAlign: "right", flexShrink: 0, minWidth: 80 }}>
+                      <p style={{ fontSize: 13, fontWeight: 700, color: toneC[tTone] || T.ink }}>
+                        {tOver > 0 ? `+${fmt(tOver)}` : fmt(tRem)}
+                      </p>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
       </Card>
@@ -1154,17 +1228,18 @@ const renderBudgetRow = (b: Budget) => {
     {budgetsLoading ? <Spinner /> : (
       <>
         {activeBudgets.length > 0 && (
-          <div style={{ marginBottom:24 }}>
-            <p style={{ fontSize:12, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10 }}>Active</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ marginBottom:32 }}>
+            <p style={{ fontSize:12, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:14 }}>Active</p>
+            {/* The wrapper layout has been changed to flex column (list view) */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               {activeBudgets.map(renderBudgetRow)}
             </div>
           </div>
         )}
         {inactiveBudgets.length > 0 && (
           <div>
-            <p style={{ fontSize:12, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10 }}>Inactive / Completed</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <p style={{ fontSize:12, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em", marginBottom:14 }}>Inactive / Completed</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
               {inactiveBudgets.map(renderBudgetRow)}
             </div>
           </div>
@@ -1172,7 +1247,6 @@ const renderBudgetRow = (b: Budget) => {
         {budgets.length === 0 && <p style={{ color:T.muted, fontSize:14, padding:16 }}>No budgets yet. Create one to get started.</p>}
       </>
     )}
-
     <Modal open={modal.open} onClose={()=>setModal({open:false})} title={isEdit?"Edit Budget":"New Budget"}
       footer={<div style={{ display:"flex", gap:10 }}>
         <Btn variant="ghost" onClick={()=>setModal({open:false})} full>Cancel</Btn>
