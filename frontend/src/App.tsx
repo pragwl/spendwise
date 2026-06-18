@@ -579,10 +579,9 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
                 </div>
                 <Progress pct={p} tone={cardTone} h={8} />
                 <p style={{ fontSize:11, color:T.faint, marginTop:5, display:"flex", alignItems:"center" }}>{Math.round(p)}% used<KpiInfo text="What share of this budget's total amount has been spent so far." /></p>
-                {(() => {
+                  {(() => {
                   const dg = calcSpendingGuidance(amt, used, b.startDate, b.endDate, b._count?.expenses);
                   if (!dg.remainDays || p < 60) return null;
-                  const ct = dg.projectedOver > 0 || over > 0 ? "danger" : dg.cutNeeded > 0 ? "warn" : "sage";
                   const alertColor = dg.projectedOver > 0 || over > 0 ? T.danger : T.warn;
                   const alertBg    = dg.projectedOver > 0 || over > 0 ? T.dangerS : T.warnS;
                   const vSize      = mobile ? 14 : 17;
