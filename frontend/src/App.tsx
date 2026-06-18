@@ -1225,7 +1225,7 @@ function BudgetsScreen() {
                 </div>
               ))}
             </div>
-            {showGuide && ((()=>{
+            {showGuide && (() => {
               const alertColor = guide.projectedOver > 0 || over > 0 ? T.danger : T.warn;
               const alertBg    = guide.projectedOver > 0 || over > 0 ? T.dangerS : T.warnS;
               const vSize      = mobile ? 14 : 17;
