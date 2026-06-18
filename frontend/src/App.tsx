@@ -579,38 +579,137 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
                 </div>
                 <Progress pct={p} tone={cardTone} h={8} />
                 <p style={{ fontSize:11, color:T.faint, marginTop:5, display:"flex", alignItems:"center" }}>{Math.round(p)}% used<KpiInfo text="What share of this budget's total amount has been spent so far." /></p>
-                {(()=>{
+                {(() => {
                   const dg = calcSpendingGuidance(amt, used, b.startDate, b.endDate, b._count?.expenses);
                   if (!dg.remainDays || p < 60) return null;
                   const ct = dg.projectedOver > 0 || over > 0 ? "danger" : dg.cutNeeded > 0 ? "warn" : "sage";
+                  const alertColor = dg.projectedOver > 0 || over > 0 ? T.danger : T.warn;
+                  const alertBg    = dg.projectedOver > 0 || over > 0 ? T.dangerS : T.warnS;
+                  const vSize      = mobile ? 14 : 17;
+                  const tPad       = mobile ? "8px 10px" : "10px 12px";
+                  const GuideTile  = ({ bg=T.paper, border=`1px solid ${T.line}`, label, labelColor=T.muted, value, valueColor=T.ink, sub, tip }: { bg?:string; border?:string; label:string; labelColor?:string; value:string; valueColor?:string; sub:string; tip:string }) => (
+                    <div style={{ background:bg, borderRadius:10, padding:tPad, border, minWidth:0 }}>
+                      <div style={{ display:"flex", alignItems:"flex-start", gap:3, marginBottom:4 }}>
+                        <p style={{ fontSize:10, color:labelColor, fontWeight:700, textTransform:"uppercase", letterSpacing:".03em", lineHeight:1.3, flex:1 }}>{label}</p>
+                        <InfoTip text={tip} />
+                      </div>
+                      <p style={{ fontSize:vSize, fontWeight:800, color:valueColor, lineHeight:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{value}</p>
+                      <p style={{ fontSize:10, color:T.faint, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{sub}</p>
+                    </div>
+                  );
                   return (
-                    <div style={{ marginTop:8, borderRadius:10, background:toneS[ct], border:`1px solid ${toneC[ct]}44`, padding:"8px 10px" }}>
-                      <p style={{ fontSize:10, color:toneC[ct], fontWeight:700, marginBottom:4 }}>🎯 To stay on budget</p>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
-                        <div style={{ minWidth:0 }}>
-                          <p style={{ fontSize:10, color:T.faint, display:"flex", alignItems:"center" }}>Max/day<KpiInfo text="The most you can spend each day and still finish within your budget." /></p>
-                          <p style={{ fontSize:13, fontWeight:800, color:toneC[ct], overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{dg.safeDailyLimit > 0 ? `${fmt(dg.safeDailyLimit)}/d` : "₹0"}</p>
-                        </div>
-                        {dg.projectedOver > 0 ? (
-                          <div style={{ minWidth:0 }}>
-                            <p style={{ fontSize:10, color:T.faint, display:"flex", alignItems:"center" }}>Overshoot<KpiInfo text="If you keep spending at today's pace, you'll go over budget by this amount." /></p>
-                            <p style={{ fontSize:13, fontWeight:800, color:T.danger, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>+{fmt(dg.projectedOver)}</p>
-                          </div>
-                        ) : dg.cutNeeded > 0 ? (
-                          <div style={{ minWidth:0 }}>
-                            <p style={{ fontSize:10, color:T.faint, display:"flex", alignItems:"center" }}>Cut/day<KpiInfo text="You need to reduce your daily spending by this amount to stay within budget." /></p>
-                            <p style={{ fontSize:13, fontWeight:800, color:T.warn, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fmt(dg.cutNeeded)}/d</p>
-                          </div>
-                        ) : (
-                          <div style={{ minWidth:0 }}>
-                            <p style={{ fontSize:10, color:T.faint, display:"flex", alignItems:"center" }}>Max/week<KpiInfo text="The most you can spend this week without going over your budget." /></p>
-                            <p style={{ fontSize:13, fontWeight:800, color:T.sage, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fmt(dg.safeWeeklyLimit)}</p>
-                          </div>
+                    <div style={{ marginTop:14, borderRadius:12, border:`1.5px solid ${alertColor}44`, background:alertBg, padding:mobile?"10px 12px":"12px 14px" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10, flexWrap:"wrap" }}>
+                        <span style={{ fontSize:mobile?11:13, fontWeight:700, color:alertColor }}>🎯 Spending limits to stay on budget</span>
+                        <InfoTip text="These figures show how much you can afford to spend going forward without exceeding your total budget by the end date." />
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:mobile?6:8 }}>
+                        <GuideTile
+                          label="Max per day" labelColor={dg.cutNeeded > 0 ? T.danger : T.sage}
+                          value={dg.safeDailyLimit > 0 ? `${fmt(dg.safeDailyLimit)}/d` : "₹0"}
+                          valueColor={dg.cutNeeded > 0 ? T.danger : T.sage}
+                          sub={`${Math.round(dg.remainDays)} days left`}
+                          tip={`Remaining (${fmt(dg.rem)}) ÷ ${Math.round(dg.remainDays)} days left. Stay at or below this daily to avoid going over budget.`} />
+                        <GuideTile
+                          label="Max per week"
+                          value={dg.safeWeeklyLimit > 0 ? fmt(dg.safeWeeklyLimit) : "₹0"}
+                          sub="weekly target"
+                          tip="Safe daily limit × 7. Use this as your weekly budget target so you don't need to check numbers every day." />
+                        {dg.cutNeeded > 0 && (
+                          <GuideTile
+                            bg={T.warnS} border={`1px solid ${T.warn}44`}
+                            label="Reduce daily by" labelColor={T.warn}
+                            value={`${fmt(dg.cutNeeded)}/d`} valueColor={T.warn}
+                            sub={`vs ${fmt(dg.actualBurn)}/d pace`}
+                            tip={`Your current pace is ${fmt(dg.actualBurn)}/day. Cut by ${fmt(dg.cutNeeded)}/day to reach the safe limit.`} />
+                        )}
+                        {dg.projectedOver > 0 && (
+                          <GuideTile
+                            bg={T.dangerS} border={`1px solid ${T.danger}44`}
+                            label="Overshoot risk" labelColor={T.danger}
+                            value={`+${fmt(dg.projectedOver)}`} valueColor={T.danger}
+                            sub="at current pace"
+                            tip="If you keep spending at today's daily rate until the end date, you will exceed the total budget by this amount." />
+                        )}
+                        <GuideTile
+                          bg={dg.paceGap > 15 ? T.dangerS : dg.paceGap > 5 ? T.warnS : T.sageS}
+                          border={`1px solid ${dg.paceGap > 15 ? T.danger : dg.paceGap > 5 ? T.warn : T.sage}44`}
+                          label="Pace vs plan" labelColor={dg.paceGap > 15 ? T.danger : dg.paceGap > 5 ? T.warn : T.sage}
+                          value={`${dg.paceGap >= 0 ? "+" : ""}${dg.paceGap.toFixed(0)}%`}
+                          valueColor={dg.paceGap > 5 ? T.danger : T.sage}
+                          sub={`${Math.round(dg.pctBudgetUsed)}% budget · ${Math.round(dg.pctTimeElapsed)}% time`}
+                          tip={`You have used ${Math.round(dg.pctBudgetUsed)}% of the budget but ${Math.round(dg.pctTimeElapsed)}% of the time has passed. Positive = spending ahead of pace.`} />
+                        {dg.txsRemaining !== null && (
+                          <GuideTile
+                            label="Purchases left"
+                            value={`~${dg.txsRemaining}`}
+                            sub={`avg ${fmt(dg.avgTx)}/tx`}
+                            tip={`Based on your average transaction of ${fmt(dg.avgTx)}, you can make about ${dg.txsRemaining} more purchases before exhausting this budget.`} />
                         )}
                       </div>
+
+                      {/* Per-tender limits — only for tenders at risk (TIME INDEPENDENT) */}
+                      {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (() => {
+                        const atRisk = b.tenderAnalytics!.filter(ta => {
+                          const tPct = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+                          const isOverThreshold = ta.threshold != null ? tPct >= ta.threshold : tPct >= 90;
+                          return isOverThreshold || ta.spentAmount > ta.allocatedAmount;
+                        });
+                        
+                        if (atRisk.length === 0) return null;
+                        
+                        return (
+                          <div style={{ marginTop:10 }}>
+                            <p style={{ fontSize:11, fontWeight:700, color:alertColor, textTransform:"uppercase", letterSpacing:".04em", marginBottom:6 }}>Per tender</p>
+                            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                              {atRisk.map(ta => {
+                                const tOver  = Math.max(0, ta.spentAmount - ta.allocatedAmount);
+                                const tRem   = Math.max(0, ta.allocatedAmount - ta.spentAmount);
+                                const tPct   = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+                                const tShare = used > 0 ? (ta.spentAmount / used) * 100 : 0;
+                                const tTone  = tOver > 0 ? "danger" : "warn";
+                                
+                                return (
+                                  <div key={ta.splitTenderId} style={{ background:T.paper, borderRadius:10, padding:mobile?"8px 10px":"10px 12px", border:`1px solid ${toneC[tTone]}33` }}>
+                                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
+                                      <span style={{ fontSize:11 }}>{tOver > 0 ? "🔴" : "⚠️"}</span>
+                                      <span style={{ fontSize:12, fontWeight:700, color:T.ink, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ta.splitTenderName}</span>
+                                      <span style={{ fontSize:10, color:T.faint }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)}</span>
+                                    </div>
+                                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:mobile?4:6 }}>
+                                      {/* 1. Remaining / Over Limit */}
+                                      <div style={{ minWidth:0 }}>
+                                        <p style={{ fontSize:9, color:toneC[tTone], fontWeight:700, textTransform:"uppercase" }}>{tOver > 0 ? "Over Limit" : "Remaining"}</p>
+                                        <p style={{ fontSize:mobile?12:13, fontWeight:800, color:toneC[tTone], overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tOver > 0 ? `+${fmt(tOver)}` : fmt(tRem)}</p>
+                                      </div>
+                                      {/* 2. Share of total budget spending */}
+                                      <div style={{ minWidth:0 }}>
+                                        <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                                          <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Spend Share</p>
+                                          <InfoTip text={`Out of the ${fmt(used)} you've spent across this entire budget, ${Math.round(tShare)}% was paid using ${ta.splitTenderName}.`} />
+                                        </div>
+                                        <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tShare)}%</p>
+                                      </div>
+                                      {/* 3. Tender usage / Exhaustion */}
+                                      <div style={{ minWidth:0 }}>
+                                        <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                                          <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Alloc. Used</p>
+                                          <InfoTip text={`You have exhausted ${Math.round(tPct)}% of the limit assigned specifically to ${ta.splitTenderName}.`} />
+                                        </div>
+                                        <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tPct)}%</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })()}
+
                 {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))", gap:7, marginTop:10 }}>
                     {b.tenderAnalytics.map(ta => {
@@ -1292,7 +1391,7 @@ function BudgetsScreen() {
                   </div>
 
                   {/* Per-tender limits — only for tenders at risk (TIME INDEPENDENT) */}
-                  {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (()=>{
+                  {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (() => {
                     const atRisk = b.tenderAnalytics!.filter(ta => {
                       const tPct = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
                       const isOverThreshold = ta.threshold != null ? tPct >= ta.threshold : tPct >= 90;
@@ -1349,6 +1448,9 @@ function BudgetsScreen() {
                       </div>
                     );
                   })()}
+                </div>
+              );
+            })()}
 
             {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (
               <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10 }}>
