@@ -1306,10 +1306,11 @@ function BudgetsScreen() {
                         <p style={{ fontSize:11, fontWeight:700, color:alertColor, textTransform:"uppercase", letterSpacing:".04em", marginBottom:6 }}>Per tender</p>
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {atRisk.map(ta => {
-                            const tOver = Math.max(0, ta.spentAmount - ta.allocatedAmount);
-                            const tRem  = Math.max(0, ta.allocatedAmount - ta.spentAmount);
-                            const tPct  = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
-                            const tTone = tOver > 0 ? "danger" : "warn";
+                            const tOver  = Math.max(0, ta.spentAmount - ta.allocatedAmount);
+                            const tRem   = Math.max(0, ta.allocatedAmount - ta.spentAmount);
+                            const tPct   = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+                            const tShare = used > 0 ? (ta.spentAmount / used) * 100 : 0;
+                            const tTone  = tOver > 0 ? "danger" : "warn";
                             
                             return (
                               <div key={ta.splitTenderId} style={{ background:T.paper, borderRadius:10, padding:mobile?"8px 10px":"10px 12px", border:`1px solid ${toneC[tTone]}33` }}>
@@ -1318,14 +1319,27 @@ function BudgetsScreen() {
                                   <span style={{ fontSize:12, fontWeight:700, color:T.ink, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ta.splitTenderName}</span>
                                   <span style={{ fontSize:10, color:T.faint }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)}</span>
                                 </div>
-                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:mobile?4:6 }}>
+                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:mobile?4:6 }}>
+                                  {/* 1. Remaining / Over Limit */}
                                   <div style={{ minWidth:0 }}>
                                     <p style={{ fontSize:9, color:toneC[tTone], fontWeight:700, textTransform:"uppercase" }}>{tOver > 0 ? "Over Limit" : "Remaining"}</p>
                                     <p style={{ fontSize:mobile?12:13, fontWeight:800, color:toneC[tTone], overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tOver > 0 ? `+${fmt(tOver)}` : fmt(tRem)}</p>
                                   </div>
+                                  {/* 2. Share of total budget spending */}
                                   <div style={{ minWidth:0 }}>
-                                    <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Usage</p>
-                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tPct)}% spent</p>
+                                    <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                                      <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Spend Share</p>
+                                      <InfoTip text={`Out of the ${fmt(used)} you've spent across this entire budget, ${Math.round(tShare)}% was paid using ${ta.splitTenderName}.`} />
+                                    </div>
+                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tShare)}%</p>
+                                  </div>
+                                  {/* 3. Tender usage / Exhaustion */}
+                                  <div style={{ minWidth:0 }}>
+                                    <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                                      <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Alloc. Used</p>
+                                      <InfoTip text={`You have exhausted ${Math.round(tPct)}% of the limit assigned specifically to ${ta.splitTenderName}.`} />
+                                    </div>
+                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tPct)}%</p>
                                   </div>
                                 </div>
                               </div>
@@ -1335,9 +1349,6 @@ function BudgetsScreen() {
                       </div>
                     );
                   })()}
-                </div>
-              );
-            })()}
 
             {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (
               <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10 }}>
