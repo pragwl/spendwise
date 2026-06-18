@@ -13,6 +13,19 @@ import {
 const fmt  = (n: number) => appConfig.app.currency + Math.round(n).toLocaleString(appConfig.app.locale);
 const fmtS = (n: number) => n >= 100000 ? appConfig.app.currency+(n/100000).toFixed(1)+"L" : n >= 1000 ? appConfig.app.currency+(n/1000).toFixed(1)+"k" : appConfig.app.currency+Math.round(n);
 const toDateStr = (d: string) => (d || "").slice(0, 10);
+
+// Calendar-safe date parsers (Stripping time to avoid timezone offset bugs & fractional days)
+const getSafeDate = (dateStr: string) => {
+  if (!dateStr) return new Date();
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+const getTodaySafe = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
 const T = {
   primary:"#C2623F", primaryS:"#FAEEE9",
   danger:"#C0392B",  dangerS:"#FDECEA",
@@ -24,6 +37,7 @@ const T = {
 };
 const toneC: Record<string,string> = { danger:T.danger, warn:T.warn, sage:T.sage, sky:T.sky, primary:T.primary };
 const toneS: Record<string,string> = { danger:T.dangerS, warn:T.warnS, sage:T.sageS, sky:T.skyS, primary:T.primaryS };
+
 function health(pct: number) {
   if (pct >= 100) return { label:"Over budget", tone:"danger" };
   if (pct >= 85)  return { label:"Watch",       tone:"warn" };
@@ -34,12 +48,14 @@ function health(pct: number) {
 const CHART_PALETTE = ["#C2623F","#3BAF7E","#9B6DBF","#5B8FD4","#E8A838","#E07B5A","#61AFEF","#E5C07B","#C678DD","#56B6C2","#E06C75","#98C379"];
 
 function calcBurnMetrics(amt: number, used: number, startDate: string, endDate: string) {
-  const today       = new Date();
-  const start       = new Date(startDate);
-  const end         = new Date(endDate);
-  const totalDays   = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
-  const elapsedDays = Math.max(1, Math.min(totalDays, (today.getTime() - start.getTime()) / 86400000));
-  const remainDays  = Math.max(0, (end.getTime() - today.getTime()) / 86400000);
+  const today       = getTodaySafe();
+  const start       = getSafeDate(startDate);
+  const end         = getSafeDate(endDate);
+  // +1 added for inclusive days calculation
+  const totalDays   = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const elapsedDays = Math.max(1, Math.min(totalDays, Math.round((today.getTime() - start.getTime()) / 86400000) + 1));
+  const remainDays  = Math.max(0, totalDays - elapsedDays);
+  
   const rem         = Math.max(0, amt - used);
   const plannedBurn = amt / totalDays;
   const actualBurn  = used / elapsedDays;
@@ -63,12 +79,14 @@ function calcBurnMetrics(amt: number, used: number, startDate: string, endDate: 
 }
 
 function calcSpendingGuidance(amt: number, used: number, startDate: string, endDate: string, txCount?: number) {
-  const today       = new Date();
-  const start       = new Date(startDate);
-  const end         = new Date(endDate);
-  const totalDays   = Math.max(1, (end.getTime() - start.getTime()) / 86400000);
-  const elapsedDays = Math.max(1, Math.min(totalDays, (today.getTime() - start.getTime()) / 86400000));
-  const remainDays  = Math.max(0, (end.getTime() - today.getTime()) / 86400000);
+  const today       = getTodaySafe();
+  const start       = getSafeDate(startDate);
+  const end         = getSafeDate(endDate);
+  
+  const totalDays   = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const elapsedDays = Math.max(1, Math.min(totalDays, Math.round((today.getTime() - start.getTime()) / 86400000) + 1));
+  const remainDays  = Math.max(0, totalDays - elapsedDays);
+  
   const rem         = Math.max(0, amt - used);
   const over        = Math.max(0, used - amt);
   const actualBurn  = used / elapsedDays;
@@ -80,13 +98,14 @@ function calcSpendingGuidance(amt: number, used: number, startDate: string, endD
   const cutNeeded        = remainDays > 0 ? Math.max(0, actualBurn - safeDailyLimit) : 0;
   // Projected overshoot if current pace continues
   const projectedOver    = Math.max(0, forecast - amt);
-  // Pace: % of budget used vs % of period elapsed — above 0 means spending ahead of time
+  // Pace: % of budget used vs % of period elapsed
   const pctTimeElapsed   = (elapsedDays / totalDays) * 100;
   const pctBudgetUsed    = amt > 0 ? (used / amt) * 100 : 0;
   const paceGap          = pctBudgetUsed - pctTimeElapsed;
-  // Transactions remaining at current avg transaction size
+  // Transactions remaining
   const avgTx            = txCount && txCount > 0 ? used / txCount : 0;
   const txsRemaining     = avgTx > 0 && rem > 0 ? Math.floor(rem / avgTx) : null;
+  
   return { safeDailyLimit, safeWeeklyLimit, cutNeeded, projectedOver, paceGap, pctBudgetUsed, pctTimeElapsed, actualBurn, remainDays, rem, over, avgTx, txsRemaining };
 }
 
@@ -373,7 +392,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   // Category breakdown, recent list, and monthly trend — all from the scoped expenses
   const cats = computeCategoryBreakdown(scopedExp);
   const filteredRecent = [...scopedExp]
-    .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort((a,b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime())
     .slice(0, 5);
 
   const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -662,7 +681,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
             <div style={{ width:36, height:36, borderRadius:11, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:18 }}>{e.category?.icon||"💡"}</div>
             <div style={{ flex:1, minWidth:0 }}>
               <p style={{ fontSize:13, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
-              <p style={{ fontSize:11, color:T.faint }}>{new Date(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
+              <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
             </div>
             <span style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</span>
           </div>)
@@ -745,7 +764,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
         Promise.all(navFilters.budgetIds.map(id =>
           expensesApi.getAll({ ...apiFilters, budgetId:id }).then(r => r.data ?? [])
         )).then(arrs => {
-          const merged = arrs.flat().sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          const merged = arrs.flat().sort((a,b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime());
           setLocalExp(merged);
         }).catch(console.error)
           .finally(() => setLocalLoading(false));
@@ -787,7 +806,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   // Use locally fetched set (multi-budget drill) or DataContext
   const baseExp = localExp ?? expenses;
   // Client-side post-filters applied in sequence
-  const dowExp      = activeDowFilter !== null ? baseExp.filter(e => new Date(e.date).getDay() === activeDowFilter) : baseExp;
+  const dowExp      = activeDowFilter !== null ? baseExp.filter(e => getSafeDate(e.date).getDay() === activeDowFilter) : baseExp;
   const costExp     = navCostType ? dowExp.filter(e => navCostType === "fixed" ? e.costType === "fixed" : e.costType !== "fixed") : dowExp;
   const unbudgExp   = navUnbudgeted ? costExp.filter(e => !e.budgetId) : costExp;
   const spikeExp    = navSpikeDates ? unbudgExp.filter(e => navSpikeDates!.has(e.date.slice(0,10))) : unbudgExp;
@@ -879,7 +898,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
               </div>
               <div style={{ textAlign:"right" }}>
                 <p style={{ fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</p>
-                <p style={{ fontSize:11, color:T.faint }}>{new Date(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}</p>
+                <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}</p>
               </div>
               <IconBtn icon="✏️" onClick={()=>onOpenExpense(e)} tone="primary" />
               <IconBtn icon="🗑️" onClick={()=>deleteExpense(e.id)} tone="danger" />
@@ -891,7 +910,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
             <div key={date} style={{ marginBottom:16 }}>
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:7 }}>
                 <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>
-                  {new Date(date).toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"short"})}
+                  {getSafeDate(date).toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"short"})}
                 </span>
                 <span style={{ fontSize:11, fontWeight:700, color:T.faint }}>{fmt(items.reduce((s,e)=>s+Number(e.amount),0))}</span>
               </div>
@@ -904,7 +923,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
                   </div>
                   <div style={{ textAlign:"right" }}>
                     <p style={{ fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</p>
-                    <p style={{ fontSize:11, color:T.faint }}>{new Date(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
+                    <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
                   </div>
                   <IconBtn icon="✏️" onClick={()=>onOpenExpense(e)} tone="primary" />
                   <IconBtn icon="🗑️" onClick={()=>deleteExpense(e.id)} tone="danger" />
@@ -923,7 +942,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
   const { categories, budgets, sources, splitTenders, createExpense, updateExpense, updateSource } = useData();
   const mobile = useMobile();
   const isEdit = !!expense;
-  const blank = { title:"", amount:"", date:new Date().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable" };
+  const blank = { title:"", amount:"", date:getTodaySafe().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable" };
   const [f, sf] = useState(blank);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -1206,7 +1225,7 @@ function BudgetsScreen() {
                 </div>
               ))}
             </div>
-            {showGuide && (()=>{
+            {showGuide && ((()=>{
               const alertColor = guide.projectedOver > 0 || over > 0 ? T.danger : T.warn;
               const alertBg    = guide.projectedOver > 0 || over > 0 ? T.dangerS : T.warnS;
               const vSize      = mobile ? 14 : 17;
@@ -1272,22 +1291,26 @@ function BudgetsScreen() {
                     )}
                   </div>
 
-                  {/* Per-tender limits — only for tenders at risk */}
+                  {/* Per-tender limits — only for tenders at risk (TIME INDEPENDENT) */}
                   {b.tenderAnalytics && b.tenderAnalytics.length > 0 && (()=>{
                     const atRisk = b.tenderAnalytics!.filter(ta => {
                       const tPct = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
-                      const tg = calcSpendingGuidance(ta.allocatedAmount, ta.spentAmount, b.startDate, b.endDate);
-                      return tg.remainDays > 0 && (tPct >= 60 || tg.projectedOver > 0 || ta.spentAmount > ta.allocatedAmount);
+                      const isOverThreshold = ta.threshold != null ? tPct >= ta.threshold : tPct >= 90;
+                      return isOverThreshold || ta.spentAmount > ta.allocatedAmount;
                     });
+                    
                     if (atRisk.length === 0) return null;
+                    
                     return (
                       <div style={{ marginTop:10 }}>
                         <p style={{ fontSize:11, fontWeight:700, color:alertColor, textTransform:"uppercase", letterSpacing:".04em", marginBottom:6 }}>Per tender</p>
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {atRisk.map(ta => {
                             const tOver = Math.max(0, ta.spentAmount - ta.allocatedAmount);
-                            const tg = calcSpendingGuidance(ta.allocatedAmount, ta.spentAmount, b.startDate, b.endDate);
-                            const tTone = tOver > 0 || tg.projectedOver > 0 ? "danger" : tg.cutNeeded > 0 ? "warn" : "sage";
+                            const tRem  = Math.max(0, ta.allocatedAmount - ta.spentAmount);
+                            const tPct  = ta.allocatedAmount > 0 ? (ta.spentAmount / ta.allocatedAmount) * 100 : 0;
+                            const tTone = tOver > 0 ? "danger" : "warn";
+                            
                             return (
                               <div key={ta.splitTenderId} style={{ background:T.paper, borderRadius:10, padding:mobile?"8px 10px":"10px 12px", border:`1px solid ${toneC[tTone]}33` }}>
                                 <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
@@ -1295,20 +1318,14 @@ function BudgetsScreen() {
                                   <span style={{ fontSize:12, fontWeight:700, color:T.ink, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ta.splitTenderName}</span>
                                   <span style={{ fontSize:10, color:T.faint }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)}</span>
                                 </div>
-                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:mobile?4:6 }}>
+                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:mobile?4:6 }}>
                                   <div style={{ minWidth:0 }}>
-                                    <p style={{ fontSize:9, color:toneC[tTone], fontWeight:700, textTransform:"uppercase" }}>Max/day</p>
-                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:toneC[tTone], overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tg.safeDailyLimit > 0 ? `${fmt(tg.safeDailyLimit)}/d` : "₹0"}</p>
+                                    <p style={{ fontSize:9, color:toneC[tTone], fontWeight:700, textTransform:"uppercase" }}>{tOver > 0 ? "Over Limit" : "Remaining"}</p>
+                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:toneC[tTone], overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tOver > 0 ? `+${fmt(tOver)}` : fmt(tRem)}</p>
                                   </div>
                                   <div style={{ minWidth:0 }}>
-                                    <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>{tg.cutNeeded > 0 ? "Cut/day" : "Max/week"}</p>
-                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:tg.cutNeeded > 0 ? T.warn : T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{tg.cutNeeded > 0 ? `${fmt(tg.cutNeeded)}/d` : fmt(tg.safeWeeklyLimit)}</p>
-                                  </div>
-                                  <div style={{ minWidth:0 }}>
-                                    <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>{tg.projectedOver > 0 ? "Overshoot" : "Pace"}</p>
-                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:tg.projectedOver > 0 ? T.danger : T.sage, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                      {tg.projectedOver > 0 ? `+${fmt(tg.projectedOver)}` : `${tg.paceGap >= 0 ? "+" : ""}${tg.paceGap.toFixed(0)}%`}
-                                    </p>
+                                    <p style={{ fontSize:9, color:T.muted, fontWeight:700, textTransform:"uppercase" }}>Usage</p>
+                                    <p style={{ fontSize:mobile?12:13, fontWeight:800, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{Math.round(tPct)}% spent</p>
                                   </div>
                                 </div>
                               </div>
@@ -1775,7 +1792,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   let avgDaily = 0;
   let totalRangeDays = 1;
   if (expSet.length > 0) {
-    const ms = expSet.map(e=>new Date(e.date).getTime());
+    const ms = expSet.map(e=>getSafeDate(e.date).getTime());
     totalRangeDays = Math.max(1, Math.round((Math.max(...ms) - Math.min(...ms)) / 86400000) + 1);
     avgDaily = expSet.reduce((s,e)=>s+Number(e.amount),0) / totalRangeDays;
   }
@@ -1783,7 +1800,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   // Day-of-week breakdown (split by cost type)
   const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const dowData = DOW.map((day,i)=>{
-    const dayExp  = expSet.filter(e=>new Date(e.date).getDay()===i);
+    const dayExp  = expSet.filter(e=>getSafeDate(e.date).getDay()===i);
     const dayFix  = dayExp.filter(e=>e.costType==="fixed");
     const dayVar  = dayExp.filter(e=>e.costType!=="fixed");
     return {
@@ -1816,17 +1833,24 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const activeDaysPct = Math.round(activeDays / totalRangeDays * 100);
 
   // Weekend share: Sat (6) + Sun (0), split by cost type
-  const weekendExp      = expSet.filter(e=>{ const d=new Date(e.date).getDay(); return d===0||d===6; });
+  const weekendExp      = expSet.filter(e=>{ const d=getSafeDate(e.date).getDay(); return d===0||d===6; });
   const weekendFixed    = weekendExp.filter(e=>e.costType==="fixed").reduce((s,e)=>s+Number(e.amount),0);
   const weekendVariable = weekendExp.filter(e=>e.costType!=="fixed").reduce((s,e)=>s+Number(e.amount),0);
   const weekendTotal    = weekendExp.reduce((s,e)=>s+Number(e.amount),0);
   const weekendPct      = total > 0 ? Math.round(weekendTotal/total*100) : 0;
   const weekendDatesList = [...new Set(weekendExp.map(e=>e.date.slice(0,10)))];
 
-  // Month-over-month change (last two months of trend)
-  const momChange = monthly.length >= 2
-    ? ((monthly[monthly.length-1].spend - monthly[monthly.length-2].spend) / Math.max(1, monthly[monthly.length-2].spend)) * 100
-    : null;
+  // Month-over-month change (last two months of trend, strictly checking if consecutive)
+  let momChange: number | null = null;
+  if (monthly.length >= 2) {
+    const last = monthly[monthly.length - 1];
+    const prev = monthly[monthly.length - 2];
+    const isConsecutive = (last.year === prev.year && last.monthNum === prev.monthNum + 1) ||
+                          (last.year === prev.year + 1 && last.monthNum === 1 && prev.monthNum === 12);
+    if (isConsecutive) {
+      momChange = ((last.spend - prev.spend) / Math.max(1, prev.spend)) * 100;
+    }
+  }
 
   // Largest single expense — fixed and variable separately
   const maxFixedExp = fixedExp.length > 0    ? fixedExp.reduce((a,b)=>Number(b.amount)>Number(a.amount)?b:a)    : null;
@@ -1932,10 +1956,10 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
       tone: "sky",
       tip: "Fixed: the date with the highest fixed-cost spend. Variable: the date with the highest discretionary spend — tap to drill into those expenses.",
       rows: [
-        ...(topFixedDateEntry ? [{ icon:"📌", label:"Fixed",    amount:fmt(topFixedDateEntry[1]), detail:new Date(topFixedDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}), rowTone:"sky",
-          onClick: onDrillTo ? ()=>onDrillTo({ costType:"fixed", startDate:topFixedDateEntry[0], endDate:topFixedDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top fixed spend · ${new Date(topFixedDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
-        ...(topVarDateEntry   ? [{ icon:"📊", label:"Variable", amount:fmt(topVarDateEntry[1]),   detail:new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}),   rowTone:"warn",
-          onClick: onDrillTo ? ()=>onDrillTo({ costType:"variable", startDate:topVarDateEntry[0], endDate:topVarDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top variable spend · ${new Date(topVarDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
+        ...(topFixedDateEntry ? [{ icon:"📌", label:"Fixed",    amount:fmt(topFixedDateEntry[1]), detail:getSafeDate(topFixedDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}), rowTone:"sky",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"fixed", startDate:topFixedDateEntry[0], endDate:topFixedDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top fixed spend · ${getSafeDate(topFixedDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
+        ...(topVarDateEntry   ? [{ icon:"📊", label:"Variable", amount:fmt(topVarDateEntry[1]),   detail:getSafeDate(topVarDateEntry[0]).toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}),   rowTone:"warn",
+          onClick: onDrillTo ? ()=>onDrillTo({ costType:"variable", startDate:topVarDateEntry[0], endDate:topVarDateEntry[0], budgetIds:selBudgets.length?selBudgets:undefined, label:`Top variable spend · ${getSafeDate(topVarDateEntry[0]).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}` }) : undefined }] : []),
       ],
     },
   ] as (false|InsightItem)[]).filter((x): x is InsightItem => !!x);
@@ -2379,7 +2403,7 @@ function ReportsScreen() {
                 <td style={{ padding:"10px 4px", color:T.muted }}>{e.category?.name||"—"}</td>
                 <td style={{ padding:"10px 4px", color:T.muted }}>{e.budget?.name||"—"}</td>
                 <td style={{ padding:"10px 4px", textAlign:"right", fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</td>
-                <td style={{ padding:"10px 4px", textAlign:"right", color:T.muted }}>{new Date(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"})}</td>
+                <td style={{ padding:"10px 4px", textAlign:"right", color:T.muted }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"})}</td>
               </tr>
             ))}
           </tbody>
