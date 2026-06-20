@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from "react";
-import { expensesApi } from "./api/expenses";
-import type { Expense, Budget, Category, PaymentSource, SplitTender, BudgetSplitTenderAllocation } from "./types";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { expensesApi, ExpenseFilters } from "./api/expenses";
+import { analyticsApi } from "./api/analytics";
+import type { Expense, Budget, Category, PaymentSource, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance } from "./types";
 import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
@@ -47,93 +48,50 @@ function health(pct: number) {
 
 const CHART_PALETTE = ["#C2623F","#3BAF7E","#9B6DBF","#5B8FD4","#E8A838","#E07B5A","#61AFEF","#E5C07B","#C678DD","#56B6C2","#E06C75","#98C379"];
 
-function calcBurnMetrics(amt: number, used: number, startDate: string, endDate: string) {
-  const today       = getTodaySafe();
-  const start       = getSafeDate(startDate);
-  const end         = getSafeDate(endDate);
-  // +1 added for inclusive days calculation
-  const totalDays   = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
-  const elapsedDays = Math.max(1, Math.min(totalDays, Math.round((today.getTime() - start.getTime()) / 86400000) + 1));
-  const remainDays  = Math.max(0, totalDays - elapsedDays);
-  
-  const rem         = Math.max(0, amt - used);
-  const plannedBurn = amt / totalDays;
-  const actualBurn  = used / elapsedDays;
-  const variancePct = plannedBurn > 0 ? ((actualBurn - plannedBurn) / plannedBurn) * 100 : 0;
-  const forecast    = used + actualBurn * remainDays;
-  const runwayDays  = actualBurn > 0 ? rem / actualBurn : null;
-  const fmtRunway   = (d: number | null) => {
+// Presentation only — burn-rate metrics are computed server-side (Budget.metrics);
+// this just formats them into the tiles the budget row renders.
+function burnMetricTiles(m: BudgetMetrics) {
+  const fmtRunway = (d: number | null) => {
     if (d === null) return "—";
     if (d < 14)     return `${Math.round(d)} day${Math.round(d) !== 1 ? "s" : ""}`;
     if (d < 60)     return `${(d / 7).toFixed(1)} wk`;
     return `${(d / 30.44).toFixed(1)} mo`;
   };
   return [
-    { label:"Planned burn rate",    value:`${fmt(plannedBurn)}/day`,   hi:false, tip:"How much you should spend each day to use this budget evenly by the end date." },
-    { label:"Actual burn rate",     value:`${fmt(actualBurn)}/day`,    hi:false, tip:"How much you're actually spending per day on average since the budget started." },
-    { label:"Burn rate variance",   value:`${variancePct >= 0 ? "+" : ""}${variancePct.toFixed(1)}%`, hi:variancePct > 10, tip:"How far off your spending pace is. Positive means you're spending faster than planned; negative means slower." },
-    { label:"Remaining budget",     value:fmt(rem),                    hi:false, tip:"How much money is left in this budget right now." },
-    { label:"Forecasted end spend", value:fmt(forecast),               hi:false, tip:"If you keep spending at today's daily rate, this is the total you'll have spent by the budget's end date." },
-    { label:"Runway",               value:fmtRunway(runwayDays),       hi:false, tip:"How long the remaining budget will last if you continue spending at your current rate." },
+    { label:"Planned burn rate",    value:`${fmt(m.plannedBurn)}/day`, hi:false, tip:"How much you should spend each day to use this budget evenly by the end date." },
+    { label:"Actual burn rate",     value:`${fmt(m.actualBurn)}/day`,  hi:false, tip:"How much you're actually spending per day on average since the budget started." },
+    { label:"Burn rate variance",   value:`${m.variancePct >= 0 ? "+" : ""}${m.variancePct.toFixed(1)}%`, hi:m.variancePct > 10, tip:"How far off your spending pace is. Positive means you're spending faster than planned; negative means slower." },
+    { label:"Remaining budget",     value:fmt(m.remaining),            hi:false, tip:"How much money is left in this budget right now." },
+    { label:"Forecasted end spend", value:fmt(m.forecast),             hi:false, tip:"If you keep spending at today's daily rate, this is the total you'll have spent by the budget's end date." },
+    { label:"Runway",               value:fmtRunway(m.runwayDays),     hi:false, tip:"How long the remaining budget will last if you continue spending at your current rate." },
   ];
 }
 
-function calcSpendingGuidance(amt: number, used: number, startDate: string, endDate: string, txCount?: number) {
-  const today       = getTodaySafe();
-  const start       = getSafeDate(startDate);
-  const end         = getSafeDate(endDate);
-  
-  const totalDays   = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
-  const elapsedDays = Math.max(1, Math.min(totalDays, Math.round((today.getTime() - start.getTime()) / 86400000) + 1));
-  const remainDays  = Math.max(0, totalDays - elapsedDays);
-  
-  const rem         = Math.max(0, amt - used);
-  const over        = Math.max(0, used - amt);
-  const actualBurn  = used / elapsedDays;
-  const forecast    = used + actualBurn * remainDays;
-  // Safe daily limit: how much can be spent per remaining day without exceeding budget
-  const safeDailyLimit   = remainDays > 0 ? rem / remainDays : 0;
-  const safeWeeklyLimit  = safeDailyLimit * 7;
-  // How much the current daily pace needs to drop to stay within budget
-  const cutNeeded        = remainDays > 0 ? Math.max(0, actualBurn - safeDailyLimit) : 0;
-  // Projected overshoot if current pace continues
-  const projectedOver    = Math.max(0, forecast - amt);
-  // Pace: % of budget used vs % of period elapsed
-  const pctTimeElapsed   = (elapsedDays / totalDays) * 100;
-  const pctBudgetUsed    = amt > 0 ? (used / amt) * 100 : 0;
-  const paceGap          = pctBudgetUsed - pctTimeElapsed;
-  // Transactions remaining
-  const avgTx            = txCount && txCount > 0 ? used / txCount : 0;
-  const txsRemaining     = avgTx > 0 && rem > 0 ? Math.floor(rem / avgTx) : null;
-  
-  return { safeDailyLimit, safeWeeklyLimit, cutNeeded, projectedOver, paceGap, pctBudgetUsed, pctTimeElapsed, actualBurn, remainDays, rem, over, avgTx, txsRemaining };
-}
+const EMPTY_GUIDANCE: BudgetGuidance = {
+  safeDailyLimit:0, safeWeeklyLimit:0, cutNeeded:0, projectedOver:0, paceGap:0,
+  pctBudgetUsed:0, pctTimeElapsed:0, actualBurn:0, remainDays:0, rem:0, over:0, avgTx:0, txsRemaining:null,
+};
 
 function isTenderAlerted(ta: BudgetSplitTenderAllocation): boolean {
   if (ta.threshold == null || !ta.allocatedAmount) return false;
   return (ta.spentAmount / ta.allocatedAmount) * 100 >= ta.threshold;
 }
 
-function computeCategoryBreakdown(expenses: Expense[]) {
-  const map = new Map<string, { category: Category | null; total: number; count: number }>();
-  for (const e of expenses) {
-    const key = e.categoryId || "__none__";
-    const ex = map.get(key);
-    if (ex) { ex.total += Number(e.amount); ex.count++; }
-    else map.set(key, { category: e.category || null, total: Number(e.amount), count: 1 });
+// Fetch every page of a filtered expense query (the server caps each page at
+// 200), so drill-through views are complete rather than silently truncated.
+async function fetchAllExpenses(filters: ExpenseFilters): Promise<Expense[]> {
+  const PAGE = 200;
+  const out: Expense[] = [];
+  let offset = 0;
+  for (;;) {
+    const r = await expensesApi.getAll({ ...filters, limit: PAGE, offset });
+    const batch = r.data ?? [];
+    out.push(...batch);
+    const total = r.meta?.total ?? out.length;
+    offset += batch.length;
+    if (batch.length === 0 || out.length >= total) break;
   }
-  return [...map.values()].sort((a, b) => b.total - a.total);
-}
-
-function computeSourceBreakdown(expenses: Expense[]) {
-  const map = new Map<string, { source: PaymentSource | null; total: number; count: number }>();
-  for (const e of expenses) {
-    const key = e.sourceId || "__none__";
-    const ex = map.get(key);
-    if (ex) { ex.total += Number(e.amount); ex.count++; }
-    else map.set(key, { source: e.source || null, total: Number(e.amount), count: 1 });
-  }
-  return [...map.values()].sort((a, b) => b.total - a.total);
+  return out;
 }
 
 // ── Tiny UI ───────────────────────────────────────────────────────────────
@@ -357,21 +315,21 @@ const NAV = [
 function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const mobile = useMobile();
   const { budgets, budgetsLoading } = useData();
-  const [scopedExp, setScopedExp] = useState<Expense[]>([]);
+  const [dash, setDash] = useState<DashboardData|null>(null);
   const [selBudgetId, setSelBudgetId] = useState("");
 
   const active = budgets.filter(b => b.status === "active");
   const selectedBudget = selBudgetId ? active.find(b => b.id === selBudgetId) : null;
 
-  // Spending data is scoped to the selected budget, or all active budgets by default
+  // Category breakdown, recent list, and monthly trend are computed server-side
+  // (scoped to the selected budget, or all active budgets by default).
   useEffect(() => {
-    const ids = selBudgetId ? [selBudgetId] : active.map(b => b.id);
-    if (ids.length === 0) { setScopedExp([]); return; }
-    Promise.all(ids.map(id => expensesApi.getAll({ budgetId:id, limit:1000 }).then(r=>r.data??[])))
-      .then(arrs => setScopedExp(arrs.flat()))
+    if (budgetsLoading) return; // wait for budgets to resolve — avoids a duplicate empty-state fetch
+    analyticsApi.getDashboard(selBudgetId || undefined)
+      .then(r => setDash(r.data))
       .catch(console.error);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selBudgetId, budgets]);
+  }, [selBudgetId, budgets, budgetsLoading]);
 
   // Aggregate or single-budget metrics
   const totalBud = active.reduce((s,b) => s + Number(b.amount || 0), 0);
@@ -389,22 +347,11 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
   const overviewTone = overBudget > 0 ? "danger" : alertedTenders.length > 0 ? "warn" : h.tone;
 
-  // Category breakdown, recent list, and monthly trend — all from the scoped expenses
-  const cats = computeCategoryBreakdown(scopedExp);
-  const filteredRecent = [...scopedExp]
-    .sort((a,b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime())
-    .slice(0, 5);
-
+  // Category breakdown, recent list, and monthly trend — computed server-side
   const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const trendMap = new Map<string, number>();
-  for (const e of scopedExp) {
-    const k = e.date.slice(0, 7);
-    trendMap.set(k, (trendMap.get(k) || 0) + Number(e.amount));
-  }
-  const trendData = [...trendMap.keys()].sort().slice(-6).map(k => {
-    const [, m] = k.split("-").map(Number);
-    return { month: MONTHS[m], spend: trendMap.get(k)! };
-  });
+  const cats = dash?.categoryBreakdown ?? [];
+  const filteredRecent = dash?.recentExpenses ?? [];
+  const trendData = (dash?.monthly ?? []).map(m => ({ month: MONTHS[m.monthNum], spend: m.spend }));
 
   if (budgetsLoading) return <Spinner />;
 
@@ -590,7 +537,9 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   onNavFiltersConsumed?:()=>void;
 }) {
   const mobile = useMobile();
-  const { expenses, expensesLoading, deleteExpense, categories, budgets, sources, setExpenseFilters } = useData();
+  const { expenses, expensesLoading, expensesTotal, expensesHasMore, expensesLoadingMore, loadMoreExpenses,
+          enableExpenses, enableCategories, enableSources,
+          deleteExpense, categories, budgets, sources, setExpenseFilters } = useData();
   const [q, setQ] = useState("");
   const [filters, setFilters] = useState<ExpFilters>(defaultExpFilters);
   const [localExp, setLocalExp] = useState<Expense[]|null>(null);
@@ -605,6 +554,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
 
   // Reset filters on mount; if arriving via drill-through, apply navFilters
   useEffect(() => {
+    enableExpenses(); enableCategories(); enableSources(); // activate lazy data this screen needs
     if (navFilters) {
       const singleBudget = navFilters.budgetIds?.length === 1 ? navFilters.budgetIds[0] : "";
       const f: ExpFilters = {
@@ -625,7 +575,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       onNavFiltersConsumed?.();
 
       const apiFilters = {
-        limit: 1000, sortBy:"date" as const, order:"desc" as const,
+        sortBy:"date" as const, order:"desc" as const,
         categoryId: navFilters.categoryId || undefined,
         sourceId:   navFilters.sourceId   || undefined,
         startDate:  navFilters.startDate  || undefined,
@@ -633,18 +583,18 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       };
 
       if (navFilters.budgetIds && navFilters.budgetIds.length > 1) {
-        // Multi-budget: parallel fetch per budget, then merge
+        // Multi-budget: fetch all pages per budget, then merge
         setLocalLoading(true);
         Promise.all(navFilters.budgetIds.map(id =>
-          expensesApi.getAll({ ...apiFilters, budgetId:id }).then(r => r.data ?? [])
+          fetchAllExpenses({ ...apiFilters, budgetId:id })
         )).then(arrs => {
           const merged = arrs.flat().sort((a,b) => getSafeDate(b.date).getTime() - getSafeDate(a.date).getTime());
           setLocalExp(merged);
         }).catch(console.error)
           .finally(() => setLocalLoading(false));
       } else {
-        // Single budget or none: let DataContext handle it
-        setExpenseFilters({ ...apiFilters, budgetId: singleBudget || undefined });
+        // Single budget or none: let DataContext handle it (with infinite scroll)
+        setExpenseFilters({ ...apiFilters, budgetId: singleBudget || undefined, limit:50 });
         setLocalExp(null);
       }
     } else {
@@ -688,6 +638,22 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   const groups = filtered.reduce((m:Record<string,typeof expenses>, e)=>{
     const d = e.date.slice(0,10); if (!m[d]) m[d]=[]; m[d].push(e); return m;
   }, {});
+
+  // Infinite scroll — only for the DataContext-driven list (not multi-budget
+  // drill-throughs, which fetch their full set up front).
+  const usingLocal  = localExp !== null;
+  const canPaginate = !usingLocal && expensesHasMore;
+  const sentinelRef = useRef<HTMLDivElement|null>(null);
+  useEffect(() => {
+    if (!canPaginate) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting) loadMoreExpenses();
+    }, { rootMargin: "300px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [canPaginate, loadMoreExpenses]);
 
   return <div>
     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
@@ -806,6 +772,16 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
             </div>
           ))
         )}
+        {/* Infinite-scroll sentinel + status footer */}
+        {!usingLocal && filtered.length > 0 && (
+          <div ref={sentinelRef} style={{ padding:"14px 0 4px", textAlign:"center" }}>
+            {expensesLoadingMore
+              ? <span style={{ fontSize:12, color:T.muted }}>Loading more…</span>
+              : expensesHasMore
+                ? <span style={{ fontSize:12, color:T.faint }}>Scroll for more</span>
+                : <span style={{ fontSize:12, color:T.faint }}>All {expensesTotal} loaded</span>}
+          </div>
+        )}
       </Card>
     )}
   </div>;
@@ -813,7 +789,8 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
 
 // ── EXPENSE FORM MODAL (add + edit) ───────────────────────────────────────
 function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()=>void; expense?:Expense }) {
-  const { categories, budgets, sources, splitTenders, createExpense, updateExpense, updateSource } = useData();
+  const { categories, budgets, sources, splitTenders, createExpense, updateExpense, updateSource,
+          enableCategories, enableSources, enableSplitTenders } = useData();
   const mobile = useMobile();
   const isEdit = !!expense;
   const blank = { title:"", amount:"", date:getTodaySafe().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable" };
@@ -836,6 +813,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
 
   useEffect(()=>{
     if (open) {
+      enableCategories(); enableSources(); enableSplitTenders(); // load dropdown data on first open
       sf(expense ? {
         title:      expense.title,
         amount:     String(Number(expense.amount)),
@@ -954,7 +932,8 @@ const blankBudget: BudgetForm = { name:"", description:"", startDate:"", endDate
 
 function BudgetsScreen() {
   const mobile = useMobile();
-  const { budgets, budgetsLoading, splitTenders, createBudget, updateBudget, deleteBudget } = useData();
+  const { budgets, budgetsLoading, splitTenders, createBudget, updateBudget, deleteBudget, enableSplitTenders } = useData();
+  useEffect(() => { enableSplitTenders(); }, [enableSplitTenders]);
   const [modal, setModal] = useState<{open:boolean; budget?:Budget}>({open:false});
   const [form, setForm] = useState<BudgetForm>(blankBudget);
   const [saving, setSaving] = useState(false);
@@ -1032,9 +1011,9 @@ const renderBudgetRow = (b: Budget) => {
 
     const budgetAlerts = (b.tenderAnalytics || []).filter(isTenderAlerted);
     const rowTone     = over > 0 ? "danger" : budgetAlerts.length > 0 ? "warn" : hh.tone;
-    const burnMetrics = calcBurnMetrics(amt, used, b.startDate, b.endDate);
-    const txCount     = b._count?.expenses;
-    const guide       = calcSpendingGuidance(amt, used, b.startDate, b.endDate, txCount);
+    // Burn metrics + spending guidance are computed on the backend over all expenses
+    const burnMetrics = b.metrics ? burnMetricTiles(b.metrics) : [];
+    const guide       = b.guidance ?? EMPTY_GUIDANCE;
     const showGuide   = guide.remainDays > 0 && (p >= 60 || guide.projectedOver > 0 || over > 0);
 
     const GuideTile  = ({ bg=T.paper, border=`1px solid ${T.line}`, label, labelColor=T.muted, value, valueColor=T.ink, sub, tip }: { bg?:string; border?:string; label:string; labelColor?:string; value:string; valueColor?:string; sub:string; tip:string }) => (
@@ -1313,7 +1292,8 @@ type CatForm = { name:string; icon:string; color:string };
 const blankCat: CatForm = { name:"", icon:"", color:"#C2623F" };
 
 function CategoriesScreen() {
-  const { categories, catsLoading, createCategory, updateCategory, deleteCategory } = useData();
+  const { categories, catsLoading, createCategory, updateCategory, deleteCategory, enableCategories } = useData();
+  useEffect(() => { enableCategories(); }, [enableCategories]);
   const [modal, setModal] = useState<{open:boolean; category?:Category}>({open:false});
   const [form, setForm] = useState<CatForm>(blankCat);
   const [saving, setSaving] = useState(false);
@@ -1397,7 +1377,8 @@ const blankSrc: SrcForm = { name:"", type:"Cash", icon:"💵", color:"#5B8FD4", 
 const SRC_TYPES = [{ value:"Cash", label:"💵 Cash" }, { value:"Wallet", label:"👛 Wallet" }];
 
 function SourcesScreen() {
-  const { sources, srcsLoading, splitTenders, createSource, updateSource, deleteSource } = useData();
+  const { sources, srcsLoading, splitTenders, createSource, updateSource, deleteSource, enableSources, enableSplitTenders } = useData();
+  useEffect(() => { enableSources(); enableSplitTenders(); }, [enableSources, enableSplitTenders]);
   const [modal, setModal] = useState<{open:boolean; source?:PaymentSource}>({open:false});
   const [form, setForm] = useState<SrcForm>(blankSrc);
   const [saving, setSaving] = useState(false);
@@ -1503,7 +1484,8 @@ type SplitTenderForm = { name:string; description:string };
 const blankTender: SplitTenderForm = { name:"", description:"" };
 
 function SplitTendersScreen() {
-  const { splitTenders, splitTendersLoading, createSplitTender, updateSplitTender, deleteSplitTender } = useData();
+  const { splitTenders, splitTendersLoading, createSplitTender, updateSplitTender, deleteSplitTender, enableSplitTenders } = useData();
+  useEffect(() => { enableSplitTenders(); }, [enableSplitTenders]);
   const [modal, setModal] = useState<{open:boolean; tender?:SplitTender}>({open:false});
   const [form, setForm] = useState<SplitTenderForm>(blankTender);
   const [saving, setSaving] = useState(false);
@@ -1582,7 +1564,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const { budgets } = useData();
   const [error,   setError]           = useState("");
   const [selBudgets, setSelBudgets]   = useState<string[]>([]);
-  const [filteredExp, setFilteredExp] = useState<Expense[]|null>(null);
+  const [data, setData]               = useState<BudgetAnalytics|null>(null);
   const [expLoading, setExpLoading]   = useState(false);
   const didInit = useRef(false);
 
@@ -1596,11 +1578,13 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     }
   }, [activeBudgets]);
 
+  // Fetch server-computed metrics for the selected budget(s) — all aggregation
+  // happens in the backend over the full expense set (no row cap).
   useEffect(()=>{
-    if (selBudgets.length === 0) { setFilteredExp(null); return; }
+    if (selBudgets.length === 0) { setData(null); return; }
     setExpLoading(true);
-    Promise.all(selBudgets.map(id=>expensesApi.getAll({ budgetId:id, limit:1000 }).then(r=>r.data??[])))
-      .then(arrs=>setFilteredExp(arrs.flat()))
+    analyticsApi.getBudgetAnalytics(selBudgets)
+      .then(r=>setData(r.data))
       .catch(e=>setError(e instanceof Error?e.message:"Error"))
       .finally(()=>setExpLoading(false));
   }, [selBudgets]);
@@ -1609,118 +1593,48 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
 
   if (error) return <ErrMsg msg={error} />;
 
-  // All metrics are scoped to the selected budget(s); no selection → no data
-  const scoped  = filteredExp ?? [];
-  const cats    = computeCategoryBreakdown(scoped);
-  const srcs    = computeSourceBreakdown(scoped);
-  const total   = scoped.reduce((s,e)=>s+Number(e.amount),0);
-  const txCount = scoped.length;
-  const expSet  = scoped;
-
-  // Monthly trend computed from the selected budgets' expenses (last 6 months)
   const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const monthlyMap = new Map<string,{spend:number;count:number}>();
-  for (const e of scoped) {
-    const k  = e.date.slice(0,7);
-    const ex = monthlyMap.get(k);
-    if (ex) { ex.spend += Number(e.amount); ex.count++; }
-    else monthlyMap.set(k, { spend:Number(e.amount), count:1 });
-  }
-  const monthly = [...monthlyMap.keys()].sort().slice(-6).map(k=>{
-    const [y,m] = k.split("-").map(Number);
-    const v = monthlyMap.get(k)!;
-    return { month:MONTHS[m], year:y, monthNum:m, spend:v.spend, count:v.count };
-  });
-
-  // Fixed vs variable split
-  const fixedExp    = expSet.filter(e => e.costType === "fixed");
-  const variableExp = expSet.filter(e => e.costType !== "fixed"); // variable or undefined
-  const fixedTotal    = fixedExp.reduce((s,e)=>s+Number(e.amount),0);
-  const variableTotal = variableExp.reduce((s,e)=>s+Number(e.amount),0);
-
-  // Avg per transaction
-  const avgPerTx = txCount > 0 ? total / txCount : 0;
-
-  // Avg daily spend + total date range (shared base for multiple metrics)
-  let avgDaily = 0;
-  let totalRangeDays = 1;
-  if (expSet.length > 0) {
-    const ms = expSet.map(e=>getSafeDate(e.date).getTime());
-    totalRangeDays = Math.max(1, Math.round((Math.max(...ms) - Math.min(...ms)) / 86400000) + 1);
-    avgDaily = expSet.reduce((s,e)=>s+Number(e.amount),0) / totalRangeDays;
-  }
-
-  // Day-of-week breakdown (split by cost type)
   const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  // ── Map the server payload onto the names the JSX/stat builders expect ────
+  const total          = data?.totalSpent        ?? 0;
+  const txCount        = data?.totalTransactions ?? 0;
+  const avgPerTx       = data?.avgPerTransaction ?? 0;
+  const avgDaily       = data?.avgDailySpend     ?? 0;
+  const totalRangeDays = data?.totalRangeDays    ?? 1;
+  const cats           = data?.categoryBreakdown ?? [];
+  const srcs           = data?.sourceBreakdown   ?? [];
+  const fixedTotal     = data?.fixedTotal        ?? 0;
+  const variableTotal  = data?.variableTotal     ?? 0;
+  const fixedCount     = data?.fixedCount        ?? 0;
+  const variableCount  = data?.variableCount     ?? 0;
+
+  const monthly = (data?.monthly ?? []).map(m => ({ ...m, month: MONTHS[m.monthNum] }));
+
   const dowData = DOW.map((day,i)=>{
-    const dayExp  = expSet.filter(e=>getSafeDate(e.date).getDay()===i);
-    const dayFix  = dayExp.filter(e=>e.costType==="fixed");
-    const dayVar  = dayExp.filter(e=>e.costType!=="fixed");
-    return {
-      day,
-      fixed:    dayFix.reduce((s,e)=>s+Number(e.amount),0),
-      variable: dayVar.reduce((s,e)=>s+Number(e.amount),0),
-      total:    dayExp.reduce((s,e)=>s+Number(e.amount),0),
-      count:    dayExp.length,
-    };
+    const d = data?.dow.find(x=>x.dayIndex===i);
+    return { day, fixed:d?.fixed??0, variable:d?.variable??0, total:d?.total??0, count:d?.count??0 };
   });
   const topDow = dowData.reduce((a,b)=>b.total>a.total?b:a, dowData[0]);
 
-  // Top spending calendar date (specific day, not day-of-week)
-  const dateMap = expSet.reduce((m:Record<string,number>, e) => {
-    const d = e.date.slice(0,10); m[d] = (m[d]||0) + Number(e.amount); return m;
-  }, {});
+  const unbudgetedTotal = data?.unbudgetedTotal ?? 0;
+  const unbudgetedPct   = data?.unbudgetedPct   ?? 0;
+  const spikeDays       = data?.spikeDays        ?? 0;
+  const spikeDatesList  = data?.spikeDates        ?? [];
+  const activeDays      = data?.activeDays        ?? 0;
+  const activeDaysPct   = data?.activeDaysPct     ?? 0;
+  const weekendFixed    = data?.weekend.fixed     ?? 0;
+  const weekendVariable = data?.weekend.variable  ?? 0;
+  const weekendTotal    = data?.weekend.total     ?? 0;
+  const weekendPct      = data?.weekend.pct       ?? 0;
+  const weekendDatesList = data?.weekend.dates    ?? [];
+  const momChange: number | null = data?.momChange ?? null;
 
-  // ── Root-cause metrics ──────────────────────────────────────────────────
-  // Unbudgeted spend (no budget linked)
-  const unbudgetedTotal = expSet.filter(e=>!e.budgetId).reduce((s,e)=>s+Number(e.amount),0);
-  const unbudgetedPct   = total > 0 ? Math.round(unbudgetedTotal/total*100) : 0;
-
-  // Spike days: days where spend > 1.5× avg daily
-  const dailyTotalsArr = Object.values(dateMap);
-  const spikeDays      = avgDaily > 0 ? dailyTotalsArr.filter(d=>d > avgDaily*1.5).length : 0;
-  const spikeDatesList = avgDaily > 0 ? Object.entries(dateMap).filter(([,v])=>v > avgDaily*1.5).map(([d])=>d) : [];
-
-  // Spending frequency: % of days in range with ≥1 expense
-  const activeDays    = Object.keys(dateMap).length;
-  const activeDaysPct = Math.round(activeDays / totalRangeDays * 100);
-
-  // Weekend share: Sat (6) + Sun (0), split by cost type
-  const weekendExp      = expSet.filter(e=>{ const d=getSafeDate(e.date).getDay(); return d===0||d===6; });
-  const weekendFixed    = weekendExp.filter(e=>e.costType==="fixed").reduce((s,e)=>s+Number(e.amount),0);
-  const weekendVariable = weekendExp.filter(e=>e.costType!=="fixed").reduce((s,e)=>s+Number(e.amount),0);
-  const weekendTotal    = weekendExp.reduce((s,e)=>s+Number(e.amount),0);
-  const weekendPct      = total > 0 ? Math.round(weekendTotal/total*100) : 0;
-  const weekendDatesList = [...new Set(weekendExp.map(e=>e.date.slice(0,10)))];
-
-  // Month-over-month change (last two months of trend, strictly checking if consecutive)
-  let momChange: number | null = null;
-  if (monthly.length >= 2) {
-    const last = monthly[monthly.length - 1];
-    const prev = monthly[monthly.length - 2];
-    const isConsecutive = (last.year === prev.year && last.monthNum === prev.monthNum + 1) ||
-                          (last.year === prev.year + 1 && last.monthNum === 1 && prev.monthNum === 12);
-    if (isConsecutive) {
-      momChange = ((last.spend - prev.spend) / Math.max(1, prev.spend)) * 100;
-    }
-  }
-
-  // Largest single expense — fixed and variable separately
-  const maxFixedExp = fixedExp.length > 0    ? fixedExp.reduce((a,b)=>Number(b.amount)>Number(a.amount)?b:a)    : null;
-  const maxVarExp   = variableExp.length > 0 ? variableExp.reduce((a,b)=>Number(b.amount)>Number(a.amount)?b:a) : null;
-
-  // Top spend date — fixed and variable separately
-  const fixedDateMap = fixedExp.reduce((m:Record<string,number>, e) => {
-    const d = e.date.slice(0,10); m[d] = (m[d]||0) + Number(e.amount); return m;
-  }, {});
-  const varDateMap = variableExp.reduce((m:Record<string,number>, e) => {
-    const d = e.date.slice(0,10); m[d] = (m[d]||0) + Number(e.amount); return m;
-  }, {});
-  const topFixedDateEntry = Object.entries(fixedDateMap).sort((a,b)=>b[1]-a[1])[0] as [string,number]|undefined;
-  const topVarDateEntry   = Object.entries(varDateMap).sort((a,b)=>b[1]-a[1])[0]   as [string,number]|undefined;
-
-  // Top category share
-  const topCatPct = cats.length > 0 && total > 0 ? Math.round((cats[0].total/total)*100) : 0;
+  const maxFixedExp = data?.biggestFixed    ?? null;
+  const maxVarExp   = data?.biggestVariable ?? null;
+  const topFixedDateEntry = data?.topFixedDate ? [data.topFixedDate.date, data.topFixedDate.total] as [string,number] : undefined;
+  const topVarDateEntry   = data?.topVarDate   ? [data.topVarDate.date,   data.topVarDate.total]   as [string,number] : undefined;
+  const topCatPct = data?.topCatPct ?? 0;
 
   type StatItemRow = { icon:string; label:string; amount:string; tone:string; onClick?:()=>void };
   type StatItem = { label:string; value:string; icon:string; tone:string; tip:string; sub?:string; onClick?:()=>void; rows?:StatItemRow[] };
@@ -1859,7 +1773,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Budget selected but no expenses */}
-    {!expLoading && selBudgets.length > 0 && expSet.length === 0 && (
+    {!expLoading && selBudgets.length > 0 && txCount === 0 && (
       <Card style={{ padding:"44px 20px", textAlign:"center" }}>
         <p style={{ fontSize:30, marginBottom:8 }}>🗒️</p>
         <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No expenses yet</p>
@@ -1868,7 +1782,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Cost type split */}
-    {expSet.length > 0 && (
+    {txCount > 0 && (
       <Card style={{ marginBottom:18 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
           <span style={{ fontWeight:700, fontSize:15, color:T.ink }}>Fixed vs Variable</span>
@@ -1877,14 +1791,14 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:10 }}>
           {[
             { label:"Total (all)",    value:fmtS(total),         sub:`${txCount} transactions`,             tone:"primary", tip:"All expenses combined — fixed + variable." },
-            { label:"Fixed costs",    value:fmtS(fixedTotal),    sub:`${fixedExp.length} transactions`,     tone:"sky",     tip:"Predictable, recurring expenses like rent, EMI, or subscriptions. Hard to reduce short-term.",
-              onClick: onDrillTo && fixedExp.length > 0 ? ()=>onDrillTo!({ costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:"Fixed expenses" }) : undefined },
-            { label:"Variable costs", value:fmtS(variableTotal), sub:`${variableExp.length} transactions`,  tone:"warn",    tip:"Discretionary or irregular expenses. This is where you have the most room to cut.",
-              onClick: onDrillTo && variableExp.length > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
+            { label:"Fixed costs",    value:fmtS(fixedTotal),    sub:`${fixedCount} transactions`,     tone:"sky",     tip:"Predictable, recurring expenses like rent, EMI, or subscriptions. Hard to reduce short-term.",
+              onClick: onDrillTo && fixedCount > 0 ? ()=>onDrillTo!({ costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:"Fixed expenses" }) : undefined },
+            { label:"Variable costs", value:fmtS(variableTotal), sub:`${variableCount} transactions`,  tone:"warn",    tip:"Discretionary or irregular expenses. This is where you have the most room to cut.",
+              onClick: onDrillTo && variableCount > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
             { label:"Variable share", value:total>0?`${Math.round(variableTotal/total*100)}%`:"—",
               sub:`${fmt(variableTotal)} of ${fmt(total)}`, tone: total>0&&variableTotal/total>0.7?"danger":"sage",
               tip:"What percentage of your total spend is variable (controllable). Above 70% means most of your spending is flexible — you have leverage to reduce it.",
-              onClick: onDrillTo && variableExp.length > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
+              onClick: onDrillTo && variableCount > 0 ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined },
           ].map(s=>(
             <div key={s.label} onClick={s.onClick}
               style={{ borderRadius:14, background:toneS[s.tone], border:`1px solid ${toneC[s.tone]}33`, padding:"12px 14px", cursor:s.onClick?"pointer":"default" }}>
@@ -1899,7 +1813,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
           ))}
         </div>
         {/* Avg per tx split */}
-        {fixedExp.length > 0 && variableExp.length > 0 && (
+        {fixedCount > 0 && variableCount > 0 && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:10 }}>
             <div onClick={onDrillTo ? ()=>onDrillTo!({ costType:"fixed", budgetIds:selBudgets.length?selBudgets:undefined, label:"Fixed expenses" }) : undefined}
               style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}`, cursor:onDrillTo?"pointer":"default" }}>
@@ -1907,7 +1821,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
                 <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg fixed / tx</p>
                 {onDrillTo && <span style={{ fontSize:11, color:T.muted }}>→</span>}
               </div>
-              <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(fixedTotal/fixedExp.length)}</p>
+              <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(fixedTotal/fixedCount)}</p>
             </div>
             <div onClick={onDrillTo ? ()=>onDrillTo!({ costType:"variable", budgetIds:selBudgets.length?selBudgets:undefined, label:"Variable expenses" }) : undefined}
               style={{ background:T.cream, borderRadius:10, padding:"10px 12px", border:`1px solid ${T.line}`, cursor:onDrillTo?"pointer":"default" }}>
@@ -1915,7 +1829,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
                 <p style={{ fontSize:10, color:T.muted, fontWeight:700, marginBottom:3 }}>Avg variable / tx</p>
                 {onDrillTo && <span style={{ fontSize:11, color:T.muted }}>→</span>}
               </div>
-              <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(variableTotal/variableExp.length)}</p>
+              <p style={{ fontSize:mobile?13:15, fontWeight:800, color:T.ink }}>{fmtS(variableTotal/variableCount)}</p>
             </div>
           </div>
         )}
@@ -1923,7 +1837,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Stats grid — 2×2 on mobile, 4-col on desktop */}
-    {expSet.length > 0 && (
+    {txCount > 0 && (
     <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(4,1fr)", gap:12, marginBottom:18 }}>
       {stats.map(s=>(
         <Card key={s.label} style={{ padding:"14px 16px" }} onClick={s.onClick}>
@@ -1940,7 +1854,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Insight chips — 2-col on mobile, auto-fill grid on desktop */}
-    {expSet.length > 0 && insights.length > 0 && (
+    {txCount > 0 && insights.length > 0 && (
       <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"repeat(auto-fill, minmax(200px, 1fr))", gap:mobile?8:10, marginBottom:18 }}>
         {insights.map((ins,i)=>(
           <div key={i} onClick={ins.onClick}
@@ -1983,7 +1897,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Spending behaviour — root-cause metrics */}
-    {expSet.length > 0 && (
+    {txCount > 0 && (
       <div style={{ marginBottom:18 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
           <span style={{ fontWeight:700, fontSize:15, color:T.ink }}>Spending behaviour</span>
@@ -2047,7 +1961,7 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
     )}
 
     {/* Day-of-week chart */}
-    {expSet.length > 0 && (
+    {txCount > 0 && (
       <Card style={{ marginBottom:18 }}>
         <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:4 }}>Spending by day of week</span>
         <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>Fixed vs variable spend per day</p>
@@ -2163,11 +2077,15 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
 }
 
 // ── REPORTS SCREEN ────────────────────────────────────────────────────────
+const REPORT_PAGE = 50;
 function ReportsScreen() {
   const { budgets } = useData();
   const [selBudgetId, setSelBudgetId] = useState("");
+  const [summary, setSummary]         = useState<ReportSummary|null>(null);
   const [reportExp, setReportExp]     = useState<Expense[]>([]);
+  const [total, setTotal]             = useState(0);
   const [loading, setLoading]         = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const didInit = useRef(false);
 
   const allBudgets = budgets;
@@ -2180,32 +2098,52 @@ function ReportsScreen() {
     }
   }, [allBudgets]);
 
+  // Summary metrics (over ALL rows) + first page of the table, computed server-side
   useEffect(()=>{
-    if (!selBudgetId) { setReportExp([]); setLoading(false); return; }
+    if (!selBudgetId) { setSummary(null); setReportExp([]); setTotal(0); setLoading(false); return; }
     setLoading(true);
-    expensesApi.getAll({ limit:1000, budgetId:selBudgetId, sortBy:"date", order:"desc" })
-      .then(r => setReportExp(r.data ?? []))
+    analyticsApi.getReport(selBudgetId, REPORT_PAGE, 0)
+      .then(r => { setSummary(r.data.summary); setReportExp(r.data.expenses); setTotal(r.meta?.total ?? r.data.expenses.length); })
       .catch(console.error)
       .finally(()=>setLoading(false));
   }, [selBudgetId]);
 
-  const total = reportExp.reduce((s,e)=>s+Number(e.amount),0);
+  const hasMore = reportExp.length < total;
+  const loadMore = useCallback(()=>{
+    if (loadingMore || !selBudgetId || reportExp.length >= total) return;
+    setLoadingMore(true);
+    analyticsApi.getReport(selBudgetId, REPORT_PAGE, reportExp.length)
+      .then(r => setReportExp(prev => {
+        const seen = new Set(prev.map(e=>e.id));
+        return [...prev, ...r.data.expenses.filter(e=>!seen.has(e.id))];
+      }))
+      .catch(console.error)
+      .finally(()=>setLoadingMore(false));
+  }, [loadingMore, selBudgetId, reportExp.length, total]);
 
+  const sentinelRef = useRef<HTMLDivElement|null>(null);
+  useEffect(()=>{
+    if (!hasMore) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(es => { if (es[0]?.isIntersecting) loadMore(); }, { rootMargin:"300px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, loadMore]);
+
+  // CSV export streams the FULL dataset straight from the backend (no page cap)
   const downloadCSV = () => {
-    const rows = [
-      ["Title","Amount","Date","Category","Budget","Source","Notes"],
-      ...reportExp.map(e=>[e.title,e.amount,e.date.slice(0,10),e.category?.name||"",e.budget?.name||"",e.source?.name||"",e.notes||""]),
-    ];
-    const csv  = rows.map(r=>r.map(x=>`"${x}"`).join(",")).join("\n");
-    const blob = new Blob([csv],{type:"text/csv"});
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a"); a.href=url; a.download="spendwise-export.csv"; a.click();
+    if (!selBudgetId) return;
+    const a = document.createElement("a");
+    a.href = analyticsApi.reportCsvUrl(selBudgetId);
+    a.download = "spendwise-export.csv";
+    document.body.appendChild(a); a.click(); a.remove();
   };
 
   return <div>
     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
       <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Reports</h1>
-      <Btn size="lg" onClick={downloadCSV}>⬇ Export CSV</Btn>
+      <Btn size="lg" onClick={downloadCSV} disabled={!selBudgetId}>⬇ Export CSV</Btn>
     </div>
 
     {/* Budget filter */}
@@ -2231,7 +2169,7 @@ function ReportsScreen() {
       </Card>
     ) : (<>
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))", gap:13, marginBottom:18 }}>
-      {[{l:"Total spent",v:fmt(total),t:"primary"},{l:"Transactions",v:String(reportExp.length),t:"sky"},{l:"Avg/transaction",v:fmt(total/Math.max(reportExp.length,1)),t:"sage"}].map(s=>
+      {[{l:"Total spent",v:fmt(summary?.totalSpent??0),t:"primary"},{l:"Transactions",v:String(summary?.totalTransactions??0),t:"sky"},{l:"Avg/transaction",v:fmt(summary?.avgTransaction??0),t:"sage"}].map(s=>
         <div key={s.l} style={{ borderRadius:16, border:`1px solid ${T.line}`, padding:"14px 16px", background:T.paper }}>
           <p style={{ fontSize:11, color:T.muted }}>{s.l}</p>
           <p style={{ fontWeight:800, fontSize:22, color:toneC[s.t], marginTop:4 }}>{s.v}</p>
@@ -2250,7 +2188,7 @@ function ReportsScreen() {
             </tr>
           </thead>
           <tbody>
-            {reportExp.slice(0,200).map(e=>(
+            {reportExp.map(e=>(
               <tr key={e.id} style={{ borderBottom:`1px solid ${T.line}` }}>
                 <td style={{ padding:"10px 4px", fontWeight:600, color:T.ink }}>{e.title}</td>
                 <td style={{ padding:"10px 4px", color:T.muted }}>{e.category?.name||"—"}</td>
@@ -2263,6 +2201,15 @@ function ReportsScreen() {
         </table>
         </div>
         {reportExp.length === 0 && <p style={{ fontSize:13, color:T.muted, padding:8 }}>No expenses found.</p>}
+        {reportExp.length > 0 && (
+          <div ref={sentinelRef} style={{ padding:"14px 0 4px", textAlign:"center" }}>
+            {loadingMore
+              ? <span style={{ fontSize:12, color:T.muted }}>Loading more…</span>
+              : hasMore
+                ? <span style={{ fontSize:12, color:T.faint }}>Scroll for more</span>
+                : <span style={{ fontSize:12, color:T.faint }}>All {total} loaded</span>}
+          </div>
+        )}
       </Card>
     )}
     </>)}

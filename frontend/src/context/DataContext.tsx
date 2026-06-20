@@ -13,15 +13,19 @@ interface DataCtx {
   categories: Category[];        catsLoading: boolean;
   sources: PaymentSource[];      srcsLoading: boolean;
   budgets: Budget[];             budgetsLoading: boolean;
-  recentExpenses: Expense[];
   expenses: Expense[];           expensesTotal: number; expensesLoading: boolean;
+  expensesHasMore: boolean;      expensesLoadingMore: boolean;
+  loadMoreExpenses: () => void;
+  enableExpenses: () => void;
+  enableCategories: () => void;
+  enableSources: () => void;
+  enableSplitTenders: () => void;
   expenseFilters: ExpenseFilters;
   setExpenseFilters: React.Dispatch<React.SetStateAction<ExpenseFilters>>;
   refetchSplitTenders: () => void;
   refetchCategories:   () => void;
   refetchSources:      () => void;
   refetchBudgets:      () => void;
-  refetchExpenses:     () => void;
   createSplitTender: (d: Omit<SplitTender,"id"|"createdAt"|"_count">)         => Promise<SplitTender>;
   updateSplitTender: (id: string, d: Partial<SplitTender>)                     => Promise<SplitTender>;
   deleteSplitTender: (id: string)                                               => Promise<void>;
@@ -50,14 +54,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [srcsLoading, setSrcsLoading] = useState(true);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
-  const [recentExpenses, setRecent] = useState<Expense[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [expensesTotal, setExpensesTotal] = useState(0);
   const [expensesLoading, setExpensesLoading] = useState(true);
+  const [expensesLoadingMore, setExpensesLoadingMore] = useState(false);
+  // The main expense list is only fetched once a screen that needs it (Expenses)
+  // activates it — Dashboard/Analytics/Reports never load it.
+  const [expensesActive, setExpensesActive] = useState(false);
   const [expenseFilters, setExpenseFilters] = useState<ExpenseFilters>({
     limit: 50, sortBy: "date", order: "desc",
   });
-  const [fetchKey, setFetchKey] = useState(0);
+
+  const expensesHasMore = expenses.length < expensesTotal;
+  const enableExpenses = useCallback(() => setExpensesActive(true), []);
+
+  // Reference collections are loaded on demand by the screens/modal that use
+  // them, so screens like Dashboard/Analytics/Reports don't trigger their
+  // fetches. (Budgets stays eager — almost every screen needs it.)
+  const [catsActive, setCatsActive]               = useState(false);
+  const [srcsActive, setSrcsActive]               = useState(false);
+  const [splitTendersActive, setSplitTendersActive] = useState(false);
+  const enableCategories   = useCallback(() => setCatsActive(true), []);
+  const enableSources      = useCallback(() => setSrcsActive(true), []);
+  const enableSplitTenders = useCallback(() => setSplitTendersActive(true), []);
 
   const refetchSplitTenders = useCallback(() => {
     setSplitTendersLoading(true);
@@ -79,30 +98,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
     budgetsApi.getAll().then(r => setBudgets(r.data ?? [])).catch(console.error).finally(() => setBudgetsLoading(false));
   }, []);
 
-  const refetchExpenses = useCallback(() => setFetchKey(k => k + 1), []);
+  // Budgets eager; the rest load only once a consumer activates them.
+  useEffect(() => { refetchBudgets(); }, [refetchBudgets]);
+  useEffect(() => { if (splitTendersActive) refetchSplitTenders(); }, [splitTendersActive, refetchSplitTenders]);
+  useEffect(() => { if (catsActive) refetchCategories(); },          [catsActive, refetchCategories]);
+  useEffect(() => { if (srcsActive) refetchSources(); },             [srcsActive, refetchSources]);
 
-  useEffect(() => { refetchSplitTenders(); }, [refetchSplitTenders]);
-  useEffect(() => { refetchCategories(); },  [refetchCategories]);
-  useEffect(() => { refetchSources(); },     [refetchSources]);
-  useEffect(() => { refetchBudgets(); },     [refetchBudgets]);
-
-  // Recent expenses for dashboard — fetched once, updated locally
+  // Main expense list — fetches the first page once activated, and re-fetches
+  // when filters change (replaces the list and resets pagination to offset 0).
   useEffect(() => {
-    expensesApi.getAll({ limit: 5, sortBy: "date", order: "desc" })
-      .then(r => setRecent(r.data ?? [])).catch(console.error);
-  }, []);
-
-  // Main expense list — re-fetches when filters or fetchKey change
-  useEffect(() => {
+    if (!expensesActive) return;
     let live = true;
     setExpensesLoading(true);
-    expensesApi.getAll(expenseFilters)
+    expensesApi.getAll({ ...expenseFilters, offset: 0 })
       .then(r => { if (live) { setExpenses(r.data ?? []); setExpensesTotal(r.meta?.total ?? r.data?.length ?? 0); } })
       .catch(console.error)
       .finally(() => { if (live) setExpensesLoading(false); });
     return () => { live = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(expenseFilters), fetchKey]);
+  }, [JSON.stringify(expenseFilters), expensesActive]);
+
+  // Fetch the next page and append it (infinite scroll).
+  const loadMoreExpenses = useCallback(() => {
+    if (expensesLoadingMore || expenses.length >= expensesTotal) return;
+    setExpensesLoadingMore(true);
+    expensesApi.getAll({ ...expenseFilters, offset: expenses.length })
+      .then(r => {
+        const incoming = r.data ?? [];
+        // Dedupe in case the list shifted between pages
+        setExpenses(prev => {
+          const seen = new Set(prev.map(e => e.id));
+          return [...prev, ...incoming.filter(e => !seen.has(e.id))];
+        });
+        if (r.meta?.total != null) setExpensesTotal(r.meta.total);
+      })
+      .catch(console.error)
+      .finally(() => setExpensesLoadingMore(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expenses.length, expensesTotal, expensesLoadingMore, JSON.stringify(expenseFilters)]);
 
   // ── Split Tender CRUD ──────────────────────────────────────────────────
   const createSplitTender = async (d: Omit<SplitTender,"id"|"createdAt"|"_count">) => {
@@ -172,7 +205,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const createExpense = async (d: Omit<Expense,"id"|"createdAt"|"category"|"budget"|"source">) => {
     const r = await expensesApi.create(d);
     const e = r.data;
-    setRecent(p => [e, ...p].slice(0, 5));
     setExpenses(p => [e, ...p]);
     setExpensesTotal(p => p + 1);
     refetchBudgets();
@@ -181,14 +213,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const updateExpense = async (id: string, d: Partial<Expense>) => {
     const r = await expensesApi.update(id, d);
     const e = r.data;
-    setRecent(p => p.map(x => x.id === id ? e : x));
     setExpenses(p => p.map(x => x.id === id ? e : x));
     refetchBudgets();
     return e;
   };
   const deleteExpense = async (id: string) => {
     await expensesApi.delete(id);
-    setRecent(p => p.filter(x => x.id !== id));
     setExpenses(p => p.filter(x => x.id !== id));
     setExpensesTotal(p => Math.max(0, p - 1));
     refetchBudgets();
@@ -198,10 +228,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider value={{
       splitTenders, splitTendersLoading,
       categories, catsLoading, sources, srcsLoading,
-      budgets, budgetsLoading, recentExpenses,
+      budgets, budgetsLoading,
       expenses, expensesTotal, expensesLoading,
+      expensesHasMore, expensesLoadingMore, loadMoreExpenses, enableExpenses,
+      enableCategories, enableSources, enableSplitTenders,
       expenseFilters, setExpenseFilters,
-      refetchSplitTenders, refetchCategories, refetchSources, refetchBudgets, refetchExpenses,
+      refetchSplitTenders, refetchCategories, refetchSources, refetchBudgets,
       createSplitTender, updateSplitTender, deleteSplitTender,
       createCategory, updateCategory, deleteCategory,
       createSource, updateSource, deleteSource,

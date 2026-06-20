@@ -36,6 +36,31 @@ export interface PaymentSource {
   splitTender?:   { id: string; name: string } | null;
 }
 
+export interface BudgetMetrics {
+  plannedBurn: number;
+  actualBurn:  number;
+  variancePct: number;
+  remaining:   number;
+  forecast:    number;
+  runwayDays:  number | null;
+}
+
+export interface BudgetGuidance {
+  safeDailyLimit:  number;
+  safeWeeklyLimit: number;
+  cutNeeded:       number;
+  projectedOver:   number;
+  paceGap:         number;
+  pctBudgetUsed:   number;
+  pctTimeElapsed:  number;
+  actualBurn:      number;
+  remainDays:      number;
+  rem:             number;
+  over:            number;
+  avgTx:           number;
+  txsRemaining:    number | null;
+}
+
 export interface Budget {
   id:               string;
   name:             string;
@@ -49,6 +74,8 @@ export interface Budget {
   createdAt:        string;
   _count?:          { expenses: number };
   tenderAnalytics?: BudgetSplitTenderAllocation[];
+  metrics?:         BudgetMetrics;
+  guidance?:        BudgetGuidance;
 }
 
 export interface Expense {
@@ -95,4 +122,50 @@ export interface MonthlyTrend {
   month: number;
   total: number;
   count: number;
+}
+
+export interface BudgetAnalytics {
+  totalSpent:        number;
+  totalTransactions: number;
+  avgPerTransaction: number;
+  avgDailySpend:     number;
+  totalRangeDays:    number;
+  categoryBreakdown: { category: Category | null; total: number; count: number }[];
+  sourceBreakdown:   { source: PaymentSource | null; total: number; count: number }[];
+  monthly:           { year: number; monthNum: number; spend: number; count: number }[];
+  fixedTotal:        number;
+  fixedCount:        number;
+  variableTotal:     number;
+  variableCount:     number;
+  dow:               { dayIndex: number; fixed: number; variable: number; total: number; count: number }[];
+  unbudgetedTotal:   number;
+  unbudgetedPct:     number;
+  spikeDays:         number;
+  spikeDates:        string[];
+  activeDays:        number;
+  activeDaysPct:     number;
+  weekend:           { fixed: number; variable: number; total: number; pct: number; dates: string[] };
+  momChange:         number | null;
+  biggestFixed:      { id: string; title: string; amount: number; date: string } | null;
+  biggestVariable:   { id: string; title: string; amount: number; date: string } | null;
+  topFixedDate:      { date: string; total: number } | null;
+  topVarDate:        { date: string; total: number } | null;
+  topCatPct:         number;
+}
+
+export interface ReportSummary {
+  totalSpent:        number;
+  totalTransactions: number;
+  avgTransaction:    number;
+}
+
+export interface ReportResponse {
+  summary:  ReportSummary;
+  expenses: Expense[];
+}
+
+export interface DashboardData {
+  categoryBreakdown: { category: Category | null; total: number; count: number }[];
+  recentExpenses:    Expense[];
+  monthly:           { year: number; monthNum: number; spend: number; count: number }[];
 }

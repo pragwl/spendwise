@@ -22,6 +22,50 @@ const BudgetSchema = z.object({
 
 type ExpRow = { amount: unknown; source: { splitTenderId: string | null } | null };
 
+const DAY_MS = 86400000;
+// Reduce a date-only value to a UTC-midnight epoch for tz-independent day math.
+const utcMidnight = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
+// Burn-rate metrics + spending guidance for a budget, computed over its full
+// expense set (usedAmount/txCount are aggregated from all linked expenses).
+function computeBudgetMetrics(amt: number, used: number, startDate: Date, endDate: Date, txCount: number) {
+  const now   = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const start = utcMidnight(startDate);
+  const end   = utcMidnight(endDate);
+
+  const totalDays   = Math.max(1, Math.round((end - start) / DAY_MS) + 1); // inclusive
+  const elapsedDays = Math.max(1, Math.min(totalDays, Math.round((today - start) / DAY_MS) + 1));
+  const remainDays  = Math.max(0, totalDays - elapsedDays);
+
+  const rem  = Math.max(0, amt - used);
+  const over = Math.max(0, used - amt);
+
+  const plannedBurn = amt / totalDays;
+  const actualBurn  = used / elapsedDays;
+  const variancePct = plannedBurn > 0 ? ((actualBurn - plannedBurn) / plannedBurn) * 100 : 0;
+  const forecast    = used + actualBurn * remainDays;
+  const runwayDays  = actualBurn > 0 ? rem / actualBurn : null;
+
+  const safeDailyLimit  = remainDays > 0 ? rem / remainDays : 0;
+  const safeWeeklyLimit = safeDailyLimit * 7;
+  const cutNeeded       = remainDays > 0 ? Math.max(0, actualBurn - safeDailyLimit) : 0;
+  const projectedOver   = Math.max(0, forecast - amt);
+  const pctTimeElapsed  = (elapsedDays / totalDays) * 100;
+  const pctBudgetUsed   = amt > 0 ? (used / amt) * 100 : 0;
+  const paceGap         = pctBudgetUsed - pctTimeElapsed;
+  const avgTx           = txCount > 0 ? used / txCount : 0;
+  const txsRemaining    = avgTx > 0 && rem > 0 ? Math.floor(rem / avgTx) : null;
+
+  return {
+    metrics:  { plannedBurn, actualBurn, variancePct, remaining: rem, forecast, runwayDays },
+    guidance: {
+      safeDailyLimit, safeWeeklyLimit, cutNeeded, projectedOver, paceGap,
+      pctBudgetUsed, pctTimeElapsed, actualBurn, remainDays, rem, over, avgTx, txsRemaining,
+    },
+  };
+}
+
 function buildTenderAnalytics(
   budgetTenders: Array<{ splitTenderId: string; allocatedAmount: unknown; threshold: unknown; splitTender: { name: string } }>,
   expenses: ExpRow[]
@@ -51,12 +95,20 @@ export const budgetController = {
         },
       });
 
-      const enriched = budgets.map((b) => ({
-        ...b,
-        usedAmount:     b.expenses.reduce((s, e) => s + Number(e.amount), 0),
-        tenderAnalytics: buildTenderAnalytics(b.splitTenders, b.expenses),
-        expenses:        undefined,
-      }));
+      const enriched = budgets.map((b) => {
+        const usedAmount = b.expenses.reduce((s, e) => s + Number(e.amount), 0);
+        const { metrics, guidance } = computeBudgetMetrics(
+          Number(b.amount), usedAmount, b.startDate, b.endDate, b._count.expenses
+        );
+        return {
+          ...b,
+          usedAmount,
+          tenderAnalytics: buildTenderAnalytics(b.splitTenders, b.expenses),
+          metrics,
+          guidance,
+          expenses: undefined,
+        };
+      });
 
       return sendSuccess(res, enriched);
     } catch (err) { next(err); }
@@ -78,8 +130,11 @@ export const budgetController = {
 
       const usedAmount     = budget.expenses.reduce((s, e) => s + Number(e.amount), 0);
       const tenderAnalytics = buildTenderAnalytics(budget.splitTenders, budget.expenses);
+      const { metrics, guidance } = computeBudgetMetrics(
+        Number(budget.amount), usedAmount, budget.startDate, budget.endDate, budget.expenses.length
+      );
 
-      return sendSuccess(res, { ...budget, usedAmount, tenderAnalytics });
+      return sendSuccess(res, { ...budget, usedAmount, tenderAnalytics, metrics, guidance });
     } catch (err) { next(err); }
   },
 
@@ -116,7 +171,10 @@ export const budgetController = {
       });
 
       const tenderAnalytics = buildTenderAnalytics(result!.splitTenders, []);
-      return sendSuccess(res, { ...result, tenderAnalytics, usedAmount: 0 }, 201);
+      const { metrics, guidance } = computeBudgetMetrics(
+        Number(result!.amount), 0, result!.startDate, result!.endDate, 0
+      );
+      return sendSuccess(res, { ...result, tenderAnalytics, usedAmount: 0, metrics, guidance }, 201);
     } catch (err) { next(err); }
   },
 
@@ -160,8 +218,11 @@ export const budgetController = {
 
       const usedAmount     = result.expenses.reduce((s, e) => s + Number(e.amount), 0);
       const tenderAnalytics = buildTenderAnalytics(result.splitTenders, result.expenses);
+      const { metrics, guidance } = computeBudgetMetrics(
+        Number(result.amount), usedAmount, result.startDate, result.endDate, result.expenses.length
+      );
 
-      return sendSuccess(res, { ...result, usedAmount, tenderAnalytics, expenses: undefined });
+      return sendSuccess(res, { ...result, usedAmount, tenderAnalytics, metrics, guidance, expenses: undefined });
     } catch (err) { next(err); }
   },
 
