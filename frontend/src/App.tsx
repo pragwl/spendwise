@@ -2495,11 +2495,13 @@ const LEFT_TABS  = [
   { id:"dashboard", emoji:"🏠", label:"Home" },
   { id:"expenses",  emoji:"📋", label:"Expenses" },
 ];
+// Mobile bottom bar: 2 tabs · [ + ] · 2 tabs, so the add button is dead-centre.
+// Right side = Budgets + the More button (rendered after the loop).
 const RIGHT_TABS = [
   { id:"budgets",   emoji:"💰", label:"Budgets" },
-  { id:"analytics", emoji:"📊", label:"Analytics" },
 ];
 const MORE_NAV = [
+  { id:"analytics",     emoji:"📊", label:"Analytics" },
   { id:"categories",    emoji:"🏷️", label:"Categories" },
   { id:"sources",       emoji:"💳", label:"Sources" },
   { id:"split-tenders", emoji:"🗂️", label:"Tenders" },
