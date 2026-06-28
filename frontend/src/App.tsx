@@ -2050,6 +2050,11 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
 
   const unbudgetedTotal = data?.unbudgetedTotal ?? 0;
   const unbudgetedPct   = data?.unbudgetedPct   ?? 0;
+  // Date window spanned by the selected budgets — used to drill into the
+  // unbudgeted expenses that fall inside it (matches the backend definition).
+  const selBudgetObjs = budgets.filter(b => selBudgets.includes(b.id));
+  const periodStart = selBudgetObjs.length ? selBudgetObjs.map(b=>toDateStr(b.startDate)).sort()[0] : undefined;
+  const periodEnd   = selBudgetObjs.length ? selBudgetObjs.map(b=>toDateStr(b.endDate)).sort().slice(-1)[0] : undefined;
   const spikeDays       = data?.spikeDays        ?? 0;
   const spikeDatesList  = data?.spikeDates        ?? [];
   const activeDays      = data?.activeDays        ?? 0;
@@ -2083,9 +2088,9 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const behaviourStats: StatItem[] = [
     { label:"Unbudgeted spend",    value:fmtS(unbudgetedTotal),         icon:"🔓",
       tone: unbudgetedPct>30?"danger":unbudgetedPct>10?"warn":"sage",
-      tip:"Total spent outside any budget. High unbudgeted spend means you're regularly spending beyond your planned categories — a direct root cause of budget overruns.",
+      tip:"Total spent outside any budget during the selected budget period. High unbudgeted spend means you're regularly spending beyond your planned categories — a direct root cause of budget overruns.",
       sub:`${unbudgetedPct}% of total spend`,
-      onClick: onDrillTo && unbudgetedTotal > 0 ? ()=>onDrillTo({ unbudgeted:true, budgetIds:selBudgets.length?selBudgets:undefined, label:"Unbudgeted expenses" }) : undefined },
+      onClick: onDrillTo && unbudgetedTotal > 0 ? ()=>onDrillTo({ unbudgeted:true, startDate:periodStart, endDate:periodEnd, label:"Unbudgeted expenses" }) : undefined },
     { label:"Spike days",          value:String(spikeDays),              icon:"⚡",
       tone: spikeDays>5?"danger":spikeDays>2?"warn":"sage",
       tip:"Days where you spent 1.5× or more above your daily average. Frequent spikes point to impulsive or event-driven spending that is hard to budget for.",

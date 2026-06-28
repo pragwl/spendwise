@@ -214,9 +214,32 @@ export const analyticsController = {
 
       if (budgetIds.length === 0) return sendSuccess(res, zeroedAnalytics());
 
+      // Unbudgeted spend can't come from the budget-scoped query (every row there
+      // has a budget). Measure it separately: expenses with NO budget that fall
+      // inside the date window spanned by the selected budgets.
+      const budgetRows = await prisma.budget.findMany({
+        where:  { id: { in: budgetIds } },
+        select: { startDate: true, endDate: true },
+      });
+      let unbudgetedTotal = 0;
+      if (budgetRows.length > 0) {
+        const minStart = new Date(Math.min(...budgetRows.map(b => b.startDate.getTime())));
+        const maxEnd   = new Date(Math.max(...budgetRows.map(b => b.endDate.getTime())));
+        const ubAgg = await prisma.expense.aggregate({
+          where: { budgetId: null, date: { gte: minStart, lte: maxEnd } },
+          _sum:  { amount: true },
+        });
+        unbudgetedTotal = Number(ubAgg._sum.amount || 0);
+      }
+
       const expenses = (await loadExpenses({ budgetId: { in: budgetIds } })) as unknown as LeanExpense[];
 
-      if (expenses.length === 0) return sendSuccess(res, zeroedAnalytics());
+      if (expenses.length === 0) {
+        const z = zeroedAnalytics();
+        z.unbudgetedTotal = unbudgetedTotal;
+        z.unbudgetedPct   = unbudgetedTotal > 0 ? 100 : 0; // no budgeted spend in scope
+        return sendSuccess(res, z);
+      }
 
       const amt = (e: LeanExpense) => Number(e.amount);
       const total = expenses.reduce((s, e) => s + amt(e), 0);
@@ -290,9 +313,10 @@ export const analyticsController = {
       const activeDays    = dateTotals.size;
       const activeDaysPct = Math.round(activeDays / totalRangeDays * 100);
 
-      // Unbudgeted
-      const unbudgetedTotal = expenses.filter(e => !e.budgetId).reduce((s, e) => s + amt(e), 0);
-      const unbudgetedPct   = total > 0 ? Math.round(unbudgetedTotal / total * 100) : 0;
+      // Unbudgeted share = unbudgeted spend ÷ all spend in the period
+      // (budgeted spend in scope + unbudgeted spend in the same window).
+      const periodTotal   = total + unbudgetedTotal;
+      const unbudgetedPct  = periodTotal > 0 ? Math.round(unbudgetedTotal / periodTotal * 100) : 0;
 
       // Weekend share (Sat=6, Sun=0)
       const weekendExp = expenses.filter(e => { const d = dayOfWeek(dateKey(e.date)); return d === 0 || d === 6; });
