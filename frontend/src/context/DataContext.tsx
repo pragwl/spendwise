@@ -216,6 +216,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const deleteBudget = async (id: string) => {
     await budgetsApi.delete(id);
     setBudgets(p => p.filter(b => b.id !== id));
+    // The server cascade also removed every expense assigned to this budget
+    // (and any reimbursements tied to those expenses). Mirror that locally so
+    // open lists don't show stale rows.
+    let removed = 0;
+    setExpenses(prev => {
+      const next = prev.filter(e => e.budgetId !== id);
+      removed = prev.length - next.length;
+      return next;
+    });
+    setExpensesTotal(t => Math.max(0, t - removed));
+    refetchSources();
+    if (reimbursementsActive) refetchReimbursements();
   };
 
   // ── Reimbursement CRUD ─────────────────────────────────────────────────

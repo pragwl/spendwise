@@ -228,8 +228,27 @@ export const budgetController = {
 
   async remove(req: Request, res: Response, next: NextFunction) {
     try {
-      await prisma.budget.delete({ where: { id: req.params.id } });
-      return sendSuccess(res, { deleted: true });
+      const budget = await prisma.budget.findUnique({
+        where:  { id: req.params.id },
+        select: { id: true },
+      });
+      if (!budget) throw new NotFoundError("Budget", req.params.id);
+
+      // Full cascade: deleting a budget removes the budget itself, every expense
+      // assigned to it, and everything those expenses carry. Expense.budgetId is
+      // onDelete:SetNull, so we must delete the expenses explicitly first;
+      // their reimbursements then cascade automatically
+      // (Reimbursement.expenseId onDelete:Cascade). The budget's split-tender
+      // allocations cascade on the budget delete itself.
+      const result = await prisma.$transaction(async (tx) => {
+        const { count: expensesDeleted } = await tx.expense.deleteMany({
+          where: { budgetId: req.params.id },
+        });
+        await tx.budget.delete({ where: { id: req.params.id } });
+        return { expensesDeleted };
+      });
+
+      return sendSuccess(res, { deleted: true, ...result });
     } catch (err) { next(err); }
   },
 };

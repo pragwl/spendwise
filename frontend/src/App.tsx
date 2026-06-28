@@ -2,13 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { expensesApi, ExpenseFilters } from "./api/expenses";
 import { sourcesApi } from "./api/sources";
 import { analyticsApi } from "./api/analytics";
-import type { Expense, Budget, Category, PaymentSource, PaymentType, SourceFinancials, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance, Reimbursement } from "./types";
+import type { Expense, Budget, Category, PaymentSource, PaymentType, SourceFinancials, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance, Reimbursement, ExpenseAnalysis, AnalysisGroup, CategoryTrend } from "./types";
 import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
   PieChart, Pie, Cell, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, AreaChart, Area,
+  ResponsiveContainer, AreaChart, Area, LineChart, Line,
 } from "recharts";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -28,6 +28,11 @@ const todayStr = () => {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+// Inclusive number of days between two date-only strings (start & end both count).
+const daysInclusive = (start: string, end: string) => {
+  if (!start || !end) return 0;
+  return Math.max(0, Math.round((getSafeDate(end).getTime() - getSafeDate(start).getTime()) / 86400000) + 1);
 };
 
 const T = {
@@ -50,6 +55,9 @@ function health(pct: number) {
 }
 
 const CHART_PALETTE = ["#C2623F","#3BAF7E","#9B6DBF","#5B8FD4","#E8A838","#E07B5A","#61AFEF","#E5C07B","#C678DD","#56B6C2","#E06C75","#98C379"];
+// Bold, highly-saturated palette for multi-line charts — each series gets a
+// distinct, dense colour so overlapping lines stay easy to tell apart.
+const TREND_COLORS = ["#C0392B","#1E6FB8","#1B7F4B","#7B2FB5","#D4851A","#0E8C8C","#B5179E","#2C3E8C","#6A8C1F","#A64B00","#0B6E99","#9B1D42"];
 
 // Presentation only — burn-rate metrics are computed server-side (Budget.metrics);
 // this just formats them into the tiles the budget row renders.
@@ -318,9 +326,32 @@ const NAV = [
 // ── DASHBOARD ─────────────────────────────────────────────────────────────
 function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const mobile = useMobile();
-  const { budgets, budgetsLoading } = useData();
+  const { budgets, budgetsLoading, categories, enableCategories } = useData();
   const [dash, setDash] = useState<DashboardData|null>(null);
   const [selBudgetId, setSelBudgetId] = useState("");
+
+  // Category-trend chart: user picks one or more categories; we plot each one's
+  // monthly spend as its own line. Data comes from /analytics/category-trend.
+  useEffect(() => { enableCategories(); }, [enableCategories]);
+  const [selCats, setSelCats] = useState<string[]>([]);
+  const [catTrend, setCatTrend] = useState<CategoryTrend|null>(null);
+  const catTrendInit = useRef(false);
+  // Seed with the first few categories once they load, for a useful default view.
+  useEffect(() => {
+    if (!catTrendInit.current && categories.length > 0) {
+      catTrendInit.current = true;
+      setSelCats(categories.slice(0, 3).map(c => c.id));
+    }
+  }, [categories]);
+  useEffect(() => {
+    if (selCats.length === 0) { setCatTrend(null); return; }
+    let live = true;
+    analyticsApi.getCategoryTrend(selCats)
+      .then(r => { if (live) setCatTrend(r.data); })
+      .catch(console.error);
+    return () => { live = false; };
+  }, [selCats]);
+  const toggleCat = (id: string) => setSelCats(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
   const active = budgets.filter(b => b.status === "active");
   const selectedBudget = selBudgetId ? active.find(b => b.id === selBudgetId) : null;
@@ -356,7 +387,15 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const cats = dash?.categoryBreakdown ?? [];
   const filteredRecent = dash?.recentExpenses ?? [];
-  const trendData = (dash?.monthly ?? []).map(m => ({ month: MONTHS[m.monthNum], spend: m.spend }));
+  const trendData = (dash?.monthly ?? []).map(m => ({ month: `${MONTHS[m.monthNum]} '${String(m.year).slice(2)}`, spend: m.spend }));
+
+  // Reshape the category trend into recharts rows: one row per month with a
+  // keyed value per selected category.
+  const catTrendRows = (catTrend?.monthly ?? []).map(m => {
+    const row: Record<string, string|number> = { month: `${MONTHS[m.monthNum]} '${String(m.year).slice(2)}` };
+    (catTrend?.categories ?? []).forEach(c => { row[c.name] = m.totals[c.id] || 0; });
+    return row;
+  });
 
   if (budgetsLoading) return <Spinner />;
 
@@ -528,7 +567,160 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
         </AreaChart>
       </ResponsiveContainer>
     </Card>}
+
+    {/* Category spend by month — pick one or more categories to compare. */}
+    <Card style={{ marginTop:18 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8, marginBottom:14 }}>
+        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Category spend by month<KpiInfo text="Monthly spend for each category you select, so you can compare how categories trend over time." /></span>
+      </div>
+      {categories.length === 0 ? (
+        <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Add categories to compare their monthly spend.</p>
+      ) : (
+        <>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+            {categories.map(c => {
+              const on = selCats.includes(c.id);
+              // Match each selected chip to its line colour (same palette + order).
+              const idx = (catTrend?.categories ?? []).findIndex(t => t.id === c.id);
+              const col = on && idx >= 0 ? TREND_COLORS[idx % TREND_COLORS.length] : (c.color || T.primary);
+              return (
+                <button key={c.id} onClick={()=>toggleCat(c.id)}
+                  style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:20, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                           border:`1.5px solid ${on?col:T.line}`, background:on?col+"22":"transparent", color:on?col:T.muted }}>
+                  <span>{c.icon||"📁"}</span>{c.name}
+                </button>
+              );
+            })}
+          </div>
+          {selCats.length === 0 ? (
+            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Select one or more categories above to see their monthly trend.</p>
+          ) : catTrendRows.length === 0 ? (
+            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>No spending recorded for the selected categories.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={mobile?180:240}>
+              <LineChart data={catTrendRows}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+                <XAxis dataKey="month" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
+                <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} />
+                <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
+                <Legend wrapperStyle={{fontSize:12}} />
+                {(catTrend?.categories ?? []).map((c,i) => {
+                  const col = TREND_COLORS[i % TREND_COLORS.length];
+                  return <Line key={c.id} type="monotone" dataKey={c.name} stroke={col} strokeWidth={3} dot={{r:3,fill:col}} activeDot={{r:5}} />;
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </>
+      )}
+    </Card>
   </div>;
+}
+
+// Small square checkbox used to pick expenses for analysis.
+function Check({ on, onClick }: { on:boolean; onClick:()=>void }) {
+  return (
+    <button onClick={e=>{ e.stopPropagation(); onClick(); }}
+      style={{ width:22, height:22, borderRadius:7, flexShrink:0, cursor:"pointer",
+               border:`1.5px solid ${on?T.primary:T.faint}`, background:on?T.primary:"transparent",
+               color:"#fff", display:"grid", placeItems:"center", fontSize:12, fontFamily:"inherit", padding:0 }}>
+      {on ? "✓" : ""}
+    </button>
+  );
+}
+
+// ── EXPENSE ANALYSIS MODAL ────────────────────────────────────────────────
+// On-screen analytics over a hand-picked set of expenses. The figures are
+// computed server-side (POST /analytics/analyze-expenses) so they're exact —
+// full amounts and complete relations, not whatever the client happens to hold.
+function ExpenseAnalysisModal({ open, onClose, ids }: { open:boolean; onClose:()=>void; ids:string[] }) {
+  const [data, setData] = useState<ExpenseAnalysis|null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setData(null); setErr(""); setLoading(true);
+    analyticsApi.analyzeExpenses(ids)
+      .then(r => setData(r.data))
+      .catch(e => setErr(e instanceof Error ? e.message : "Failed to analyze"))
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const Stat = ({ label, value, sub, tone=T.ink }: { label:string; value:string; sub?:string; tone?:string }) => (
+    <div style={{ background:T.cream, border:`1px solid ${T.line}`, borderRadius:12, padding:"12px 14px", flex:"1 1 120px", minWidth:120 }}>
+      <p style={{ fontSize:10, color:T.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".04em" }}>{label}</p>
+      <p style={{ fontSize:19, fontWeight:800, color:tone, lineHeight:1.15, marginTop:4, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{value}</p>
+      {sub && <p style={{ fontSize:10, color:T.faint, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{sub}</p>}
+    </div>
+  );
+
+  const Breakdown = ({ title, rows, total }: { title:string; rows:AnalysisGroup[]; total:number }) => rows.length===0 ? null : (
+    <div style={{ marginTop:18 }}>
+      <p style={{ fontSize:12, fontWeight:700, color:T.ink, marginBottom:10 }}>{title}</p>
+      <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+        {rows.slice(0,6).map((r,i)=>{
+          const pct = total>0 ? (r.total/total)*100 : 0;
+          return (
+            <div key={i}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:12, color:T.ink, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.icon} {r.name} <span style={{ color:T.faint, fontWeight:500 }}>· {r.count}</span></span>
+                <span style={{ fontSize:12, fontWeight:700, color:T.ink, flexShrink:0 }}>{fmt(r.total)} <span style={{ color:T.faint, fontWeight:500 }}>{Math.round(pct)}%</span></span>
+              </div>
+              <div style={{ height:6, borderRadius:99, background:T.line, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${Math.min(100,pct)}%`, background:r.color, borderRadius:99 }} />
+              </div>
+            </div>
+          );
+        })}
+        {rows.length>6 && <p style={{ fontSize:11, color:T.faint }}>+ {rows.length-6} more</p>}
+      </div>
+    </div>
+  );
+
+  const dateLabel = (k:string|null) => k ? getSafeDate(k).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"}) : "—";
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Analysis · ${ids.length} expense${ids.length===1?"":"s"}`}
+      footer={<Btn onClick={onClose} full>Done</Btn>}>
+      {loading ? <Spinner />
+        : err ? <ErrMsg msg={err} />
+        : !data || data.count === 0 ? <p style={{ fontSize:13, color:T.muted, padding:8 }}>Nothing to analyze.</p>
+        : (
+        <div>
+          {/* Headline */}
+          <div style={{ background:T.primary+"12", border:`1px solid ${T.primary}33`, borderRadius:14, padding:"16px 18px", marginBottom:14 }}>
+            <p style={{ fontSize:11, color:T.primary, fontWeight:700, textTransform:"uppercase", letterSpacing:".05em" }}>Total selected</p>
+            <p style={{ fontSize:32, fontWeight:800, color:T.primary, lineHeight:1.1, marginTop:4 }}>{fmt(data.total)}</p>
+            <p style={{ fontSize:12, color:T.muted, marginTop:4 }}>{data.count} transaction{data.count===1?"":"s"} · avg {fmt(data.avg)} each</p>
+          </div>
+
+          {/* Core stats */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:10 }}>
+            <Stat label="Largest" value={fmt(data.max)} sub={data.maxExpense?.title} tone={T.danger} />
+            <Stat label="Smallest" value={fmt(data.min)} />
+            <Stat label="Average" value={fmt(data.avg)} sub="per transaction" />
+            <Stat label="Per day" value={fmt(data.perDay)} sub={data.spanDays>0?`over ${data.spanDays} day${data.spanDays===1?"":"s"}`:undefined} />
+            <Stat label="Date range" value={dateLabel(data.first)} sub={`→ ${dateLabel(data.last)}`} />
+            <Stat label="Active days" value={String(data.activeDays)} sub={data.spanDays>0?`of ${data.spanDays} in range`:undefined} />
+          </div>
+
+          {/* Composition */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:10 }}>
+            <Stat label="Fixed" value={fmt(data.fixedTotal)} sub={`${data.total>0?Math.round(data.fixedTotal/data.total*100):0}% of total`} />
+            <Stat label="Variable" value={fmt(data.variableTotal)} sub={`${data.total>0?Math.round(data.variableTotal/data.total*100):0}% of total`} />
+            {data.reimbursableTotal>0 && <Stat label="Reimbursable" value={fmt(data.reimbursableTotal)} sub={`${data.reimbursableCount} expense${data.reimbursableCount===1?"":"s"}`} tone={T.sage} />}
+            {data.unbudgetedTotal>0 && <Stat label="Unbudgeted" value={fmt(data.unbudgetedTotal)} sub={`${data.total>0?Math.round(data.unbudgetedTotal/data.total*100):0}% of total`} tone={T.warn} />}
+          </div>
+
+          <Breakdown title="By category" rows={data.byCategory} total={data.total} />
+          <Breakdown title="By payment source" rows={data.bySource} total={data.total} />
+          {data.byBudget.length>1 && <Breakdown title="By budget" rows={data.byBudget} total={data.total} />}
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 // ── EXPENSES SCREEN ───────────────────────────────────────────────────────
@@ -554,6 +746,9 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   const [navCostType, setNavCostType]     = useState<"fixed"|"variable"|null>(null);
   const [navUnbudgeted, setNavUnbudgeted] = useState(false);
   const [navSpikeDates, setNavSpikeDates] = useState<Set<string>|null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const toggleSel = (id:string) => setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const activeBudgets = budgets.filter(b => b.status === "active");
 
@@ -644,6 +839,17 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
     const d = e.date.slice(0,10); if (!m[d]) m[d]=[]; m[d].push(e); return m;
   }, {});
 
+  // Multi-select analytics — operates on the currently filtered set.
+  const selectedExpenses = filtered.filter(e => selected.has(e.id));
+  const selSum = selectedExpenses.reduce((s,e)=>s+Number(e.amount),0);
+  const allSelected = filtered.length > 0 && filtered.every(e => selected.has(e.id));
+  const toggleAll = () => setSelected(prev => {
+    const n = new Set(prev);
+    if (allSelected) filtered.forEach(e => n.delete(e.id));
+    else filtered.forEach(e => n.add(e.id));
+    return n;
+  });
+
   // Infinite scroll — only for the DataContext-driven list (not multi-budget
   // drill-throughs, which fetch their full set up front).
   const usingLocal  = localExp !== null;
@@ -729,13 +935,34 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
       </div>
     </Card>
 
+    {/* Selection / analysis bar — tick expenses below, then analyze the slice. */}
+    {!(expensesLoading || localLoading) && filtered.length > 0 && (
+      <div style={{ position:"sticky", top:8, zIndex:20, display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderRadius:13, marginBottom:12, flexWrap:"wrap",
+                    background: selectedExpenses.length ? T.primary+"14" : T.paper, border:`1px solid ${selectedExpenses.length ? T.primary+"66" : T.line}` }}>
+        <Check on={allSelected} onClick={toggleAll} />
+        <span style={{ fontSize:13, fontWeight:600, color:T.ink }}>
+          {selectedExpenses.length > 0
+            ? <>{selectedExpenses.length} selected · <span style={{ color:T.primary, fontWeight:800 }}>{fmt(selSum)}</span></>
+            : "Select expenses to analyze"}
+        </span>
+        <div style={{ marginLeft:"auto", display:"flex", gap:8, alignItems:"center" }}>
+          {selectedExpenses.length > 0 && (
+            <button onClick={()=>setSelected(new Set())}
+              style={{ fontSize:12, fontWeight:600, color:T.muted, background:"none", border:"none", cursor:"pointer", fontFamily:"inherit" }}>Clear</button>
+          )}
+          <Btn size="sm" onClick={()=>setShowAnalysis(true)} disabled={selectedExpenses.length===0}>📊 Analyze{selectedExpenses.length>0?` (${selectedExpenses.length})`:""}</Btn>
+        </div>
+      </div>
+    )}
+
     {(expensesLoading || localLoading) ? <Spinner /> : (
       <Card>
         {filtered.length === 0 && <p style={{ fontSize:13, color:T.muted, padding:8 }}>No expenses found.</p>}
         {filters.sortBy === "amount" ? (
           // Flat list sorted by amount
           [...filtered].sort((a,b)=>filters.order==="asc"?Number(a.amount)-Number(b.amount):Number(b.amount)-Number(a.amount)).map(e=>(
-            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.line}` }}>
+            <div key={e.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.line}`, background: selected.has(e.id) ? T.primary+"0D" : undefined }}>
+              <Check on={selected.has(e.id)} onClick={()=>toggleSel(e.id)} />
               <div style={{ width:42, height:42, borderRadius:13, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:20, flexShrink:0 }}>{e.category?.icon||"💡"}</div>
               <div style={{ flex:1, minWidth:0 }}>
                 <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
@@ -760,7 +987,8 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
                 <span style={{ fontSize:11, fontWeight:700, color:T.faint }}>{fmt(items.reduce((s,e)=>s+Number(e.amount),0))}</span>
               </div>
               {items.map(e=>(
-                <div key={e.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.line}` }}>
+                <div key={e.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:`1px solid ${T.line}`, background: selected.has(e.id) ? T.primary+"0D" : undefined }}>
+                  <Check on={selected.has(e.id)} onClick={()=>toggleSel(e.id)} />
                   <div style={{ width:42, height:42, borderRadius:13, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:20, flexShrink:0 }}>{e.category?.icon||"💡"}</div>
                   <div style={{ flex:1, minWidth:0 }}>
                     <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
@@ -789,6 +1017,8 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
         )}
       </Card>
     )}
+
+    <ExpenseAnalysisModal open={showAnalysis} onClose={()=>setShowAnalysis(false)} ids={selectedExpenses.map(e=>e.id)} />
   </div>;
 }
 
@@ -939,152 +1169,97 @@ type BudgetForm = { name:string; description:string; startDate:string; endDate:s
 const BCOLORS = ["#C2623F","#E8A838","#2E9E6B","#9B6DBF","#5B8FD4","#3BAF7E"];
 const blankBudget: BudgetForm = { name:"", description:"", startDate:"", endDate:"", color:"#C2623F", status:"active", tenders:[] };
 
-function BudgetsScreen() {
+// A single budget rendered as a collapsible card: the header + headline progress
+// are always visible; clicking the card reveals the full detail (burn metrics,
+// spending guidance, at-risk tenders, allocation status).
+function BudgetCard({ b, onEdit, onDelete }: { b: Budget; onEdit: () => void; onDelete: () => void }) {
   const mobile = useMobile();
-  const { budgets, budgetsLoading, splitTenders, createBudget, updateBudget, deleteBudget, enableSplitTenders } = useData();
-  useEffect(() => { enableSplitTenders(); }, [enableSplitTenders]);
-  const [modal, setModal] = useState<{open:boolean; budget?:Budget}>({open:false});
-  const [form, setForm] = useState<BudgetForm>(blankBudget);
-  const [saving, setSaving] = useState(false);
-  const isEdit = !!modal.budget;
+  const [open, setOpen] = useState(false);
 
-  const computedTotal = form.tenders.reduce((s, t) => s + (Number(t.allocatedAmount) || 0), 0);
+  const amt  = Number(b.amount || 0);
+  const used = Number(b.usedAmount || 0);
+  const rem  = Math.max(0, amt - used);
+  const over = Math.max(0, used - amt);
+  const p    = amt ? (used / amt) * 100 : 0;
+  const hh   = health(p);
 
-  // Sorted lists
-  const sortedByCreated = [...budgets].sort((a,b)=>new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime());
-  const activeBudgets   = sortedByCreated.filter(b => b.status === "active");
-  const inactiveBudgets = sortedByCreated.filter(b => b.status !== "active");
+  const budgetAlerts = (b.tenderAnalytics || []).filter(isTenderAlerted);
+  const rowTone     = over > 0 ? "danger" : budgetAlerts.length > 0 ? "warn" : hh.tone;
+  // Burn metrics + spending guidance are computed on the backend over all expenses
+  const burnMetrics = b.metrics ? burnMetricTiles(b.metrics) : [];
+  const guide       = b.guidance ?? EMPTY_GUIDANCE;
+  const showGuide   = guide.remainDays > 0 && (p >= 60 || guide.projectedOver > 0 || over > 0);
 
-  useEffect(()=>{
-    if (modal.open) {
-      if (modal.budget) {
-        const existingTenders: BudgetTenderRow[] = (modal.budget.tenderAnalytics || []).map(ta => ({
-          splitTenderId:   ta.splitTenderId,
-          allocatedAmount: String(ta.allocatedAmount),
-          threshold:       ta.threshold != null ? String(ta.threshold) : "",
-        }));
-        setForm({
-          name:        modal.budget.name,
-          description: modal.budget.description || "",
-          startDate:   toDateStr(modal.budget.startDate),
-          endDate:     toDateStr(modal.budget.endDate),
-          color:       modal.budget.color || "#C2623F",
-          status:      modal.budget.status,
-          tenders:     existingTenders.length > 0 ? existingTenders : [{ splitTenderId:"", allocatedAmount:"", threshold:"" }],
-        });
-      } else {
-        setForm({ ...blankBudget, tenders:[{ splitTenderId:"", allocatedAmount:"", threshold:"" }] });
-      }
-    }
-  }, [modal, splitTenders]);
-
-  const addTenderRow    = () => setForm(f => ({ ...f, tenders:[...f.tenders, { splitTenderId:"", allocatedAmount:"", threshold:"" }] }));
-  const removeTenderRow = (i: number) => setForm(f => ({ ...f, tenders:f.tenders.filter((_,idx)=>idx!==i) }));
-  const updateTenderRow = (i: number, field: keyof BudgetTenderRow, val: string) =>
-    setForm(f => ({ ...f, tenders:f.tenders.map((t,idx)=>idx===i ? { ...t, [field]:val } : t) }));
-
-  const save = async () => {
-    if (!form.name) return;
-    const validTenders = form.tenders.filter(t => t.splitTenderId && Number(t.allocatedAmount) > 0);
-    if (validTenders.length === 0) { alert("Add at least one split tender allocation with a positive amount."); return; }
-    try {
-      setSaving(true);
-      const splitTenderPayload = validTenders.map(t => ({
-        splitTenderId:   t.splitTenderId,
-        allocatedAmount: Number(t.allocatedAmount),
-        threshold:       t.threshold ? Number(t.threshold) : undefined,
-      }));
-      const payload = {
-        name:        form.name,
-        description: form.description || undefined,
-        startDate:   form.startDate,
-        endDate:     form.endDate,
-        color:       form.color || undefined,
-        status:      form.status as Budget["status"],
-        splitTenders: splitTenderPayload,
-      } as unknown as Omit<Budget,"id"|"createdAt"|"usedAmount"|"_count">;
-      if (isEdit) await updateBudget(modal.budget!.id, payload);
-      else         await createBudget(payload);
-      setModal({open:false});
-    } catch(e:unknown) { alert(e instanceof Error ? e.message : "Error"); }
-    finally { setSaving(false); }
-  };
-
-const renderBudgetRow = (b: Budget) => {
-    const amt  = Number(b.amount || 0);
-    const used = Number(b.usedAmount || 0);
-    const rem  = Math.max(0, amt - used);
-    const over = Math.max(0, used - amt);
-    const p    = amt ? (used / amt) * 100 : 0;
-    const hh   = health(p);
-
-    const budgetAlerts = (b.tenderAnalytics || []).filter(isTenderAlerted);
-    const rowTone     = over > 0 ? "danger" : budgetAlerts.length > 0 ? "warn" : hh.tone;
-    // Burn metrics + spending guidance are computed on the backend over all expenses
-    const burnMetrics = b.metrics ? burnMetricTiles(b.metrics) : [];
-    const guide       = b.guidance ?? EMPTY_GUIDANCE;
-    const showGuide   = guide.remainDays > 0 && (p >= 60 || guide.projectedOver > 0 || over > 0);
-
-    const GuideTile  = ({ bg=T.paper, border=`1px solid ${T.line}`, label, labelColor=T.muted, value, valueColor=T.ink, sub, tip }: { bg?:string; border?:string; label:string; labelColor?:string; value:string; valueColor?:string; sub:string; tip:string }) => (
-      <div style={{ background:bg, borderRadius:10, padding:mobile?"10px 12px":"12px 14px", border, minWidth: 140, flex: "1 1 auto" }}>
-        <div style={{ display:"flex", alignItems:"flex-start", gap:3, marginBottom:4 }}>
-          <p style={{ fontSize:10, color:labelColor, fontWeight:700, textTransform:"uppercase", letterSpacing:".03em", lineHeight:1.3, flex:1 }}>{label}</p>
-          <InfoTip text={tip} />
-        </div>
-        <p style={{ fontSize:mobile?15:18, fontWeight:800, color:valueColor, lineHeight:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{value}</p>
-        <p style={{ fontSize:10, color:T.faint, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{sub}</p>
+  const GuideTile  = ({ bg=T.paper, border=`1px solid ${T.line}`, label, labelColor=T.muted, value, valueColor=T.ink, sub, tip }: { bg?:string; border?:string; label:string; labelColor?:string; value:string; valueColor?:string; sub:string; tip:string }) => (
+    <div style={{ background:bg, borderRadius:10, padding:mobile?"10px 12px":"12px 14px", border, minWidth: 140, flex: "1 1 auto" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:3, marginBottom:4 }}>
+        <p style={{ fontSize:10, color:labelColor, fontWeight:700, textTransform:"uppercase", letterSpacing:".03em", lineHeight:1.3, flex:1 }}>{label}</p>
+        <InfoTip text={tip} />
       </div>
-    );
+      <p style={{ fontSize:mobile?15:18, fontWeight:800, color:valueColor, lineHeight:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{value}</p>
+      <p style={{ fontSize:10, color:T.faint, marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{sub}</p>
+    </div>
+  );
 
-    return (
-      <Card key={b.id} style={{ marginBottom: 0, padding: mobile ? "16px" : "24px 28px", width: "100%" }}>
-        {/* Header Row: Horizontal Layout */}
-        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", gap: 16, justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 6, height: 44, borderRadius: 99, background: b.color || T.primary, flexShrink: 0 }} />
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <p style={{ fontSize: 18, fontWeight: 800, color: T.ink }}>{b.name}</p>
-                {b.status !== "active" && <Badge tone="sky">{b.status}</Badge>}
-              </div>
-              <p style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-                {toDateStr(b.startDate)} → {toDateStr(b.endDate)}
-                {b.description && <span style={{ color: T.faint }}> · {b.description}</span>}
-              </p>
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  return (
+    <Card style={{ marginBottom: 0, padding: mobile ? "16px" : "24px 28px", width: "100%" }}>
+      {/* Header Row — click anywhere to expand/collapse detail */}
+      <div onClick={() => setOpen(o => !o)} style={{ cursor: "pointer", display: "flex", flexDirection: mobile ? "column" : "row", gap: 16, justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 12, color: T.faint, flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+          <div style={{ width: 6, height: 44, borderRadius: 99, background: b.color || T.primary, flexShrink: 0 }} />
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <p style={{ fontSize: 18, fontWeight: 800, color: T.ink }}>{b.name}</p>
+              {b.status !== "active" && <Badge tone={b.status === "completed" ? "sage" : "sky"}>{b.status}</Badge>}
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", width: mobile ? "100%" : "auto", justifyContent: mobile ? "space-between" : "flex-end" }}>
-            <ThresholdInfo alerts={over > 0 ? [] : budgetAlerts}>
-              <Badge tone={rowTone}>
-                {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold alert${budgetAlerts.length > 1 ? 's' : ''}` : hh.label}
-              </Badge>
-            </ThresholdInfo>
-            <div style={{ display: "flex", gap: 6 }}>
-              <IconBtn icon="✏️" onClick={() => setModal({ open: true, budget: b })} tone="primary" />
-              <IconBtn icon="🗑️" onClick={() => deleteBudget(b.id)} tone="danger" />
-            </div>
+            <p style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
+              {toDateStr(b.startDate)} → {toDateStr(b.endDate)}
+              <span style={{ color: T.faint }}> · {daysInclusive(toDateStr(b.startDate), toDateStr(b.endDate))} days</span>
+              {b.description && <span style={{ color: T.faint }}> · {b.description}</span>}
+            </p>
           </div>
         </div>
-
-        {/* Progress Bar Row */}
-        <div style={{ marginBottom: 20, padding: "14px 18px", borderRadius: 14, background: toneS[rowTone], border: `1px solid ${toneC[rowTone]}44` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8 }}>
-            <div>
-              <p style={{ fontSize: 11, color: toneC[rowTone], fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>
-                {over > 0 ? "Over budget" : "Remaining"}
-              </p>
-              <p style={{ fontSize: mobile ? 22 : 28, fontWeight: 800, color: toneC[rowTone], lineHeight: 1.1 }}>
-                {over > 0 ? fmt(over) : fmt(rem)}
-              </p>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <p style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{fmt(used)} spent</p>
-              <p style={{ fontSize: 12, color: T.muted }}>of {fmt(amt)} · {Math.round(p)}% used</p>
-            </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", width: mobile ? "100%" : "auto", justifyContent: mobile ? "space-between" : "flex-end" }}>
+          <ThresholdInfo alerts={over > 0 ? [] : budgetAlerts}>
+            <Badge tone={rowTone}>
+              {over > 0 ? "Over budget" : budgetAlerts.length > 0 ? `⚠️ ${budgetAlerts.length} threshold alert${budgetAlerts.length > 1 ? 's' : ''}` : hh.label}
+            </Badge>
+          </ThresholdInfo>
+          <div style={{ display: "flex", gap: 6 }} onClick={stop}>
+            <IconBtn icon="✏️" onClick={onEdit} tone="primary" />
+            <IconBtn icon="🗑️" onClick={onDelete} tone="danger" />
           </div>
-          <Progress pct={p} tone={rowTone} h={8} />
         </div>
+      </div>
 
+      {/* Progress Bar Row — always visible summary */}
+      <div onClick={() => setOpen(o => !o)} style={{ cursor: "pointer", marginBottom: open ? 20 : 0, padding: "14px 18px", borderRadius: 14, background: toneS[rowTone], border: `1px solid ${toneC[rowTone]}44` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 8 }}>
+          <div>
+            <p style={{ fontSize: 11, color: toneC[rowTone], fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>
+              {over > 0 ? "Over budget" : "Remaining"}
+            </p>
+            <p style={{ fontSize: mobile ? 22 : 28, fontWeight: 800, color: toneC[rowTone], lineHeight: 1.1 }}>
+              {over > 0 ? fmt(over) : fmt(rem)}
+            </p>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <p style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{fmt(used)} spent</p>
+            <p style={{ fontSize: 12, color: T.muted }}>of {fmt(amt)} · {Math.round(p)}% used</p>
+          </div>
+        </div>
+        <Progress pct={p} tone={rowTone} h={8} />
+        {!open && (
+          <p style={{ fontSize: 11, color: toneC[rowTone], fontWeight: 600, marginTop: 8, textAlign: "center", opacity: .8 }}>
+            Tap to see burn rate, spending limits & tenders ▾
+          </p>
+        )}
+      </div>
+
+      {open && <>
         {/* Metrics Grid (Horizontal wrap for infinite scaling) */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           {burnMetrics.map(m => (
@@ -1127,7 +1302,7 @@ const renderBudgetRow = (b: Budget) => {
             return (ta.threshold != null ? tPct >= ta.threshold : tPct >= 90) || ta.spentAmount > ta.allocatedAmount;
           });
           if (atRisk.length === 0) return null;
-          
+
           return (
             <div style={{ marginTop: 20 }}>
               <p style={{ fontSize: 12, fontWeight: 700, color: T.danger, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>⚠️ At Risk Payment Tenders</p>
@@ -1139,7 +1314,7 @@ const renderBudgetRow = (b: Budget) => {
                   const tShare = used > 0 ? (ta.spentAmount / used) * 100 : 0;
                   const tTone  = tOver > 0 ? "danger" : "warn";
                   const tMaxDaily = guide.remainDays > 0 ? tRem / guide.remainDays : 0;
-                  
+
                   return (
                     <div key={ta.splitTenderId} style={{ background: toneS[tTone], borderRadius: 12, padding: "14px", border: `1px solid ${toneC[tTone]}44`, flex: "1 1 auto", minWidth: 260 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -1203,9 +1378,128 @@ const renderBudgetRow = (b: Budget) => {
             </div>
           </div>
         )}
-      </Card>
-    );
+      </>}
+    </Card>
+  );
+}
+
+// A collapsible budget group. The Active section opens by default; Paused and
+// Completed start collapsed and expand when their header is clicked.
+function BudgetSection({ title, emoji, budgets, defaultOpen, tone, onEdit, onDelete }: {
+  title: string; emoji: string; budgets: Budget[]; defaultOpen?: boolean; tone: string;
+  onEdit: (b: Budget) => void; onDelete: (b: Budget) => void;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  if (budgets.length === 0) return null;
+  const totalSpent = budgets.reduce((s, b) => s + Number(b.usedAmount || 0), 0);
+  const totalAmt   = budgets.reduce((s, b) => s + Number(b.amount || 0), 0);
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 16px", borderRadius: 14,
+                 border: `1px solid ${T.line}`, background: T.paper, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <span style={{ fontSize: 12, color: T.faint, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+        <span style={{ fontSize: 16 }}>{emoji}</span>
+        <span style={{ fontSize: 14, fontWeight: 800, color: T.ink, textTransform: "uppercase", letterSpacing: ".04em" }}>{title}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: toneC[tone], background: toneS[tone], borderRadius: 99, padding: "2px 9px" }}>{budgets.length}</span>
+        <span style={{ marginLeft: "auto", fontSize: 12, color: T.muted, fontWeight: 600 }}>{fmt(totalSpent)} / {fmt(totalAmt)}</span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20, marginTop: 14 }}>
+          {budgets.map(b => <BudgetCard key={b.id} b={b} onEdit={() => onEdit(b)} onDelete={() => onDelete(b)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BudgetsScreen() {
+  const mobile = useMobile();
+  const { budgets, budgetsLoading, splitTenders, createBudget, updateBudget, deleteBudget, enableSplitTenders } = useData();
+  useEffect(() => { enableSplitTenders(); }, [enableSplitTenders]);
+  const [modal, setModal] = useState<{open:boolean; budget?:Budget}>({open:false});
+  const [form, setForm] = useState<BudgetForm>(blankBudget);
+  const [saving, setSaving] = useState(false);
+  const [delModal, setDelModal] = useState<{open:boolean; budget?:Budget}>({open:false});
+  const [delName, setDelName] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const isEdit = !!modal.budget;
+
+  const computedTotal = form.tenders.reduce((s, t) => s + (Number(t.allocatedAmount) || 0), 0);
+
+  // Sorted lists, split into the three status sections
+  const sortedByCreated  = [...budgets].sort((a,b)=>new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime());
+  const activeBudgets    = sortedByCreated.filter(b => b.status === "active");
+  const pausedBudgets    = sortedByCreated.filter(b => b.status === "paused");
+  const completedBudgets = sortedByCreated.filter(b => b.status === "completed");
+
+  const openDelete = (b: Budget) => { setDelName(""); setDelModal({ open:true, budget:b }); };
+  const confirmDelete = async () => {
+    if (!delModal.budget || delName.trim() !== delModal.budget.name) return;
+    try {
+      setDeleting(true);
+      await deleteBudget(delModal.budget.id);
+      setDelModal({ open:false });
+      setDelName("");
+    } catch(e:unknown) { alert(e instanceof Error ? e.message : "Error"); }
+    finally { setDeleting(false); }
   };
+
+  useEffect(()=>{
+    if (modal.open) {
+      if (modal.budget) {
+        const existingTenders: BudgetTenderRow[] = (modal.budget.tenderAnalytics || []).map(ta => ({
+          splitTenderId:   ta.splitTenderId,
+          allocatedAmount: String(ta.allocatedAmount),
+          threshold:       ta.threshold != null ? String(ta.threshold) : "",
+        }));
+        setForm({
+          name:        modal.budget.name,
+          description: modal.budget.description || "",
+          startDate:   toDateStr(modal.budget.startDate),
+          endDate:     toDateStr(modal.budget.endDate),
+          color:       modal.budget.color || "#C2623F",
+          status:      modal.budget.status,
+          tenders:     existingTenders.length > 0 ? existingTenders : [{ splitTenderId:"", allocatedAmount:"", threshold:"" }],
+        });
+      } else {
+        setForm({ ...blankBudget, tenders:[{ splitTenderId:"", allocatedAmount:"", threshold:"" }] });
+      }
+    }
+  }, [modal, splitTenders]);
+
+  const addTenderRow    = () => setForm(f => ({ ...f, tenders:[...f.tenders, { splitTenderId:"", allocatedAmount:"", threshold:"" }] }));
+  const removeTenderRow = (i: number) => setForm(f => ({ ...f, tenders:f.tenders.filter((_,idx)=>idx!==i) }));
+  const updateTenderRow = (i: number, field: keyof BudgetTenderRow, val: string) =>
+    setForm(f => ({ ...f, tenders:f.tenders.map((t,idx)=>idx===i ? { ...t, [field]:val } : t) }));
+
+  const save = async () => {
+    if (!form.name) return;
+    const validTenders = form.tenders.filter(t => t.splitTenderId && Number(t.allocatedAmount) > 0);
+    if (validTenders.length === 0) { alert("Add at least one split tender allocation with a positive amount."); return; }
+    try {
+      setSaving(true);
+      const splitTenderPayload = validTenders.map(t => ({
+        splitTenderId:   t.splitTenderId,
+        allocatedAmount: Number(t.allocatedAmount),
+        threshold:       t.threshold ? Number(t.threshold) : undefined,
+      }));
+      const payload = {
+        name:        form.name,
+        description: form.description || undefined,
+        startDate:   form.startDate,
+        endDate:     form.endDate,
+        color:       form.color || undefined,
+        status:      form.status as Budget["status"],
+        splitTenders: splitTenderPayload,
+      } as unknown as Omit<Budget,"id"|"createdAt"|"usedAmount"|"_count">;
+      if (isEdit) await updateBudget(modal.budget!.id, payload);
+      else         await createBudget(payload);
+      setModal({open:false});
+    } catch(e:unknown) { alert(e instanceof Error ? e.message : "Error"); }
+    finally { setSaving(false); }
+  };
+
 
   return <div>
     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
@@ -1215,23 +1509,11 @@ const renderBudgetRow = (b: Budget) => {
 
     {budgetsLoading ? <Spinner /> : (
       <>
-        {activeBudgets.length > 0 && (
-          <div style={{ marginBottom:32 }}>
-            <p style={{ fontSize:12, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:14 }}>Active</p>
-            {/* The wrapper layout has been changed to flex column (list view) */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              {activeBudgets.map(renderBudgetRow)}
-            </div>
-          </div>
-        )}
-        {inactiveBudgets.length > 0 && (
-          <div>
-            <p style={{ fontSize:12, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em", marginBottom:14 }}>Inactive / Completed</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              {inactiveBudgets.map(renderBudgetRow)}
-            </div>
-          </div>
-        )}
+        {/* Active opens by default; Paused (middle) and Completed (last) start
+            collapsed and expand on click. Click any budget to see its detail. */}
+        <BudgetSection title="Active"    emoji="🟢" tone="sage"    budgets={activeBudgets}    defaultOpen onEdit={b=>setModal({open:true,budget:b})} onDelete={openDelete} />
+        <BudgetSection title="Paused"    emoji="⏸️" tone="sky"     budgets={pausedBudgets}                onEdit={b=>setModal({open:true,budget:b})} onDelete={openDelete} />
+        <BudgetSection title="Completed" emoji="✅" tone="primary"  budgets={completedBudgets}             onEdit={b=>setModal({open:true,budget:b})} onDelete={openDelete} />
         {budgets.length === 0 && <p style={{ color:T.muted, fontSize:14, padding:16 }}>No budgets yet. Create one to get started.</p>}
       </>
     )}
@@ -1290,6 +1572,35 @@ const renderBudgetRow = (b: Budget) => {
           </div>
         </div>
       </div>
+    </Modal>
+
+    {/* Delete confirmation — requires typing the exact budget name. Deleting a
+        budget removes it AND every expense (plus their reimbursements) in it. */}
+    <Modal open={delModal.open} onClose={()=>{ setDelModal({open:false}); setDelName(""); }} title="Delete budget"
+      footer={<div style={{ display:"flex", gap:10 }}>
+        <Btn variant="ghost" onClick={()=>{ setDelModal({open:false}); setDelName(""); }} full>Cancel</Btn>
+        <Btn variant="danger" onClick={confirmDelete} full disabled={deleting || delName.trim() !== (delModal.budget?.name || "")}>
+          {deleting ? "Deleting…" : "Delete permanently"}
+        </Btn>
+      </div>}>
+      {delModal.budget && (
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ padding:"12px 14px", borderRadius:12, background:T.dangerS, border:`1px solid ${T.danger}44` }}>
+            <p style={{ fontSize:13, fontWeight:700, color:T.danger, marginBottom:6 }}>⚠️ This can't be undone</p>
+            <p style={{ fontSize:13, color:T.ink, lineHeight:1.5 }}>
+              Deleting <b>{delModal.budget.name}</b> will permanently remove the budget,
+              {" "}<b>all {delModal.budget._count?.expenses ?? 0} expense{(delModal.budget._count?.expenses ?? 0) === 1 ? "" : "s"}</b> assigned to it,
+              {" "}and any reimbursements tied to those expenses.
+            </p>
+          </div>
+          <div>
+            <p style={{ fontSize:12, color:T.muted, marginBottom:8 }}>
+              Type the budget name <b style={{ color:T.ink }}>{delModal.budget.name}</b> to confirm:
+            </p>
+            <Inp value={delName} onChange={e=>setDelName(e.target.value)} placeholder={delModal.budget.name} autoFocus />
+          </div>
+        </div>
+      )}
     </Modal>
   </div>;
 }

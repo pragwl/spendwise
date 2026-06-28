@@ -197,6 +197,41 @@ export interface ReportResponse {
   expenses: Expense[];
 }
 
+export interface AnalysisGroup {
+  name:  string;
+  icon:  string;
+  color: string;
+  total: number;
+  count: number;
+}
+
+export interface ExpenseAnalysis {
+  count:             number;
+  total:             number;
+  avg:               number;
+  max:               number;
+  min:               number;
+  maxExpense:        { title: string; amount: number } | null;
+  first:             string | null;
+  last:              string | null;
+  spanDays:          number;
+  activeDays:        number;
+  perDay:            number;
+  fixedTotal:        number;
+  variableTotal:     number;
+  reimbursableTotal: number;
+  reimbursableCount: number;
+  unbudgetedTotal:   number;
+  byCategory:        AnalysisGroup[];
+  bySource:          AnalysisGroup[];
+  byBudget:          AnalysisGroup[];
+}
+
+export interface CategoryTrend {
+  categories: { id: string; name: string; color: string; icon: string }[];
+  monthly:    { month: string; year: number; monthNum: number; totals: Record<string, number> }[];
+}
+
 export interface DashboardData {
   categoryBreakdown: { category: Category | null; total: number; count: number }[];
   recentExpenses:    Expense[];

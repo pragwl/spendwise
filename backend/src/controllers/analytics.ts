@@ -62,6 +62,18 @@ function zeroedAnalytics() {
   };
 }
 
+function emptyExpenseAnalysis() {
+  return {
+    count: 0, total: 0, avg: 0, max: 0, min: 0,
+    maxExpense: null as { title: string; amount: number } | null,
+    first: null as string | null, last: null as string | null,
+    spanDays: 0, activeDays: 0, perDay: 0,
+    fixedTotal: 0, variableTotal: 0,
+    reimbursableTotal: 0, reimbursableCount: 0, unbudgetedTotal: 0,
+    byCategory: [] as unknown[], bySource: [] as unknown[], byBudget: [] as unknown[],
+  };
+}
+
 export const analyticsController = {
   async getSummary(req: Request, res: Response, next: NextFunction) {
     try {
@@ -388,6 +400,122 @@ export const analyticsController = {
         .slice(0, 5);
 
       return sendSuccess(res, { categoryBreakdown, recentExpenses, monthly });
+    } catch (err) { next(err); }
+  },
+
+  // On-demand analysis over an arbitrary, user-picked set of expenses (by id).
+  // Computed server-side from the authoritative rows so the figures are exact
+  // (full amounts, complete relations) regardless of what the client has loaded.
+  async analyzeExpenses(req: Request, res: Response, next: NextFunction) {
+    try {
+      const ids: string[] = Array.isArray(req.body?.ids)
+        ? [...new Set((req.body.ids as unknown[]).map(x => String(x)))]
+        : [];
+
+      if (ids.length === 0) return sendSuccess(res, emptyExpenseAnalysis());
+
+      type AnalysisRow = {
+        title: string; amount: unknown; date: Date; costType: string; reimbursable: boolean;
+        categoryId: string | null; sourceId: string | null; budgetId: string | null;
+        category: { name: string; icon: string | null; color: string | null } | null;
+        source:   { name: string; icon: string | null } | null;
+        budget:   { name: string } | null;
+      };
+      const expenses = (await prisma.expense.findMany({
+        where:   { id: { in: ids } },
+        include: { category: true, source: true, budget: true },
+      })) as unknown as AnalysisRow[];
+
+      if (expenses.length === 0) return sendSuccess(res, emptyExpenseAnalysis());
+
+      const amt   = (e: AnalysisRow) => Number(e.amount);
+      const n     = expenses.length;
+      const total = expenses.reduce((s, e) => s + amt(e), 0);
+      const amounts = expenses.map(amt);
+      const max   = Math.max(...amounts);
+      const min   = Math.min(...amounts);
+      const maxExp = expenses.find(e => amt(e) === max)!;
+
+      const keys = expenses.map(e => dateKey(e.date)).sort();
+      const first = keys[0];
+      const last  = keys[keys.length - 1];
+      const spanDays = Math.round((dayMs(last) - dayMs(first)) / 86400000) + 1;
+      const activeDays = new Set(keys).size;
+      const perDay = spanDays > 0 ? total / spanDays : total;
+
+      const fixedTotal    = expenses.filter(e => e.costType === "fixed").reduce((s, e) => s + amt(e), 0);
+      const variableTotal = total - fixedTotal;
+      const reimb         = expenses.filter(e => e.reimbursable);
+      const reimbursableTotal = reimb.reduce((s, e) => s + amt(e), 0);
+      const unbudgetedTotal   = expenses.filter(e => !e.budgetId).reduce((s, e) => s + amt(e), 0);
+
+      type Grp = { name: string; icon: string; color: string; total: number; count: number };
+      const groupBy = (
+        keyFn:  (e: AnalysisRow) => string,
+        metaFn: (e: AnalysisRow) => { name: string; icon: string; color: string }
+      ): Grp[] => {
+        const m = new Map<string, Grp>();
+        for (const e of expenses) {
+          const k = keyFn(e);
+          const cur = m.get(k) || { ...metaFn(e), total: 0, count: 0 };
+          cur.total += amt(e); cur.count++;
+          m.set(k, cur);
+        }
+        return [...m.values()].sort((a, b) => b.total - a.total);
+      };
+
+      const byCategory = groupBy(e => e.categoryId || "__none", e => ({ name: e.category?.name || "Uncategorized", icon: e.category?.icon || "💡", color: e.category?.color || "#7A6E68" }));
+      const bySource   = groupBy(e => e.sourceId   || "__none", e => ({ name: e.source?.name   || "No source",      icon: e.source?.icon   || "💳", color: "#2563A8" }));
+      const byBudget   = groupBy(e => e.budgetId   || "__none", e => ({ name: e.budget?.name   || "Unbudgeted",     icon: "💰",                  color: "#2E7D5E" }));
+
+      return sendSuccess(res, {
+        count: n, total, avg: total / n, max, min,
+        maxExpense: { title: maxExp.title, amount: amt(maxExp) },
+        first, last, spanDays, activeDays, perDay,
+        fixedTotal, variableTotal,
+        reimbursableTotal, reimbursableCount: reimb.length, unbudgetedTotal,
+        byCategory, bySource, byBudget,
+      });
+    } catch (err) { next(err); }
+  },
+
+  // Monthly spend per selected category (one series per category), for the
+  // dashboard's category-trend chart. Covers the most recent months present.
+  async getCategoryTrend(req: Request, res: Response, next: NextFunction) {
+    try {
+      const categoryIds = String(req.query.categoryIds || "")
+        .split(",").map(s => s.trim()).filter(Boolean);
+
+      if (categoryIds.length === 0) return sendSuccess(res, { categories: [], monthly: [] });
+
+      const [cats, expenses] = await Promise.all([
+        prisma.category.findMany({ where: { id: { in: categoryIds } } }),
+        prisma.expense.findMany({
+          where:  { categoryId: { in: categoryIds } },
+          select: { amount: true, date: true, categoryId: true },
+        }),
+      ]);
+
+      // month "YYYY-MM" -> { categoryId -> total }
+      const monthMap = new Map<string, Record<string, number>>();
+      for (const e of expenses) {
+        const mk = dateKey(e.date).slice(0, 7);
+        let row = monthMap.get(mk);
+        if (!row) { row = {}; monthMap.set(mk, row); }
+        const cid = e.categoryId as string;
+        row[cid] = (row[cid] || 0) + Number(e.amount);
+      }
+
+      const monthly = [...monthMap.keys()].sort().slice(-MONTHS_BACK).map(mk => {
+        const [year, monthNum] = mk.split("-").map(Number);
+        return { month: mk, year, monthNum, totals: monthMap.get(mk)! };
+      });
+
+      const categories = cats.map(c => ({
+        id: c.id, name: c.name, color: c.color || "#C2623F", icon: c.icon || "📁",
+      }));
+
+      return sendSuccess(res, { categories, monthly });
     } catch (err) { next(err); }
   },
 

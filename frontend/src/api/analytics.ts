@@ -1,6 +1,6 @@
 import { client } from "./client";
 import { config } from "../config";
-import type { ApiResponse, AnalyticsSummary, MonthlyTrend, BudgetAnalytics, ReportResponse, DashboardData } from "../types";
+import type { ApiResponse, AnalyticsSummary, MonthlyTrend, BudgetAnalytics, ReportResponse, DashboardData, ExpenseAnalysis, CategoryTrend } from "../types";
 
 export const analyticsApi = {
   getSummary: (startDate?: string, endDate?: string) =>
@@ -28,6 +28,16 @@ export const analyticsApi = {
   getDashboard: (budgetId?: string) =>
     client.get<unknown, ApiResponse<DashboardData>>("/analytics/dashboard", {
       params: { budgetId: budgetId || undefined },
+    }),
+
+  // Accurate analysis over a hand-picked set of expenses (computed server-side).
+  analyzeExpenses: (ids: string[]) =>
+    client.post<unknown, ApiResponse<ExpenseAnalysis>>("/analytics/analyze-expenses", { ids }),
+
+  // Monthly spend per selected category, for the dashboard category-trend chart.
+  getCategoryTrend: (categoryIds: string[]) =>
+    client.get<unknown, ApiResponse<CategoryTrend>>("/analytics/category-trend", {
+      params: { categoryIds: categoryIds.join(",") },
     }),
 
   // Report summary + a paginated page of rows for the table.
