@@ -6,13 +6,15 @@ import { sourcesApi }      from "../api/sources";
 import { budgetsApi }      from "../api/budgets";
 import { expensesApi, ExpenseFilters } from "../api/expenses";
 import { splitTendersApi } from "../api/splitTenders";
-import type { Category, PaymentSource, Budget, Expense, SplitTender } from "../types";
+import { reimbursementsApi, ReimbursementInput } from "../api/reimbursements";
+import type { Category, PaymentSource, Budget, Expense, SplitTender, Reimbursement } from "../types";
 
 interface DataCtx {
   splitTenders: SplitTender[];   splitTendersLoading: boolean;
   categories: Category[];        catsLoading: boolean;
   sources: PaymentSource[];      srcsLoading: boolean;
   budgets: Budget[];             budgetsLoading: boolean;
+  reimbursements: Reimbursement[]; reimbursementsLoading: boolean;
   expenses: Expense[];           expensesTotal: number; expensesLoading: boolean;
   expensesHasMore: boolean;      expensesLoadingMore: boolean;
   loadMoreExpenses: () => void;
@@ -20,12 +22,14 @@ interface DataCtx {
   enableCategories: () => void;
   enableSources: () => void;
   enableSplitTenders: () => void;
+  enableReimbursements: () => void;
   expenseFilters: ExpenseFilters;
   setExpenseFilters: React.Dispatch<React.SetStateAction<ExpenseFilters>>;
   refetchSplitTenders: () => void;
   refetchCategories:   () => void;
   refetchSources:      () => void;
   refetchBudgets:      () => void;
+  refetchReimbursements: () => void;
   createSplitTender: (d: Omit<SplitTender,"id"|"createdAt"|"_count">)         => Promise<SplitTender>;
   updateSplitTender: (id: string, d: Partial<SplitTender>)                     => Promise<SplitTender>;
   deleteSplitTender: (id: string)                                               => Promise<void>;
@@ -38,6 +42,9 @@ interface DataCtx {
   createBudget:   (d: Omit<Budget,"id"|"createdAt"|"usedAmount"|"_count">)     => Promise<Budget>;
   updateBudget:   (id: string, d: Partial<Budget>)                             => Promise<Budget>;
   deleteBudget:   (id: string)                                                  => Promise<void>;
+  createReimbursement: (d: ReimbursementInput)                                  => Promise<Reimbursement>;
+  updateReimbursement: (id: string, d: Partial<ReimbursementInput>)            => Promise<Reimbursement>;
+  deleteReimbursement: (id: string)                                             => Promise<void>;
   createExpense:  (d: Omit<Expense,"id"|"createdAt"|"category"|"budget"|"source">) => Promise<Expense>;
   updateExpense:  (id: string, d: Partial<Expense>)                            => Promise<Expense>;
   deleteExpense:  (id: string)                                                  => Promise<void>;
@@ -54,6 +61,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [srcsLoading, setSrcsLoading] = useState(true);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
+  const [reimbursements, setReimbursements] = useState<Reimbursement[]>([]);
+  const [reimbursementsLoading, setReimbursementsLoading] = useState(true);
+  const [reimbursementsActive, setReimbursementsActive] = useState(false);
+  const enableReimbursements = useCallback(() => setReimbursementsActive(true), []);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [expensesTotal, setExpensesTotal] = useState(0);
   const [expensesLoading, setExpensesLoading] = useState(true);
@@ -98,11 +109,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     budgetsApi.getAll().then(r => setBudgets(r.data ?? [])).catch(console.error).finally(() => setBudgetsLoading(false));
   }, []);
 
+  const refetchReimbursements = useCallback(() => {
+    setReimbursementsLoading(true);
+    reimbursementsApi.getAll().then(r => setReimbursements(r.data ?? [])).catch(console.error).finally(() => setReimbursementsLoading(false));
+  }, []);
+
   // Budgets eager; the rest load only once a consumer activates them.
   useEffect(() => { refetchBudgets(); }, [refetchBudgets]);
   useEffect(() => { if (splitTendersActive) refetchSplitTenders(); }, [splitTendersActive, refetchSplitTenders]);
   useEffect(() => { if (catsActive) refetchCategories(); },          [catsActive, refetchCategories]);
   useEffect(() => { if (srcsActive) refetchSources(); },             [srcsActive, refetchSources]);
+  useEffect(() => { if (reimbursementsActive) refetchReimbursements(); }, [reimbursementsActive, refetchReimbursements]);
 
   // Main expense list — fetches the first page once activated, and re-fetches
   // when filters change (replaces the list and resets pagination to offset 0).
@@ -201,6 +218,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setBudgets(p => p.filter(b => b.id !== id));
   };
 
+  // ── Reimbursement CRUD ─────────────────────────────────────────────────
+  // Reimbursements change per-source figures (bill to pay, available, etc.),
+  // so refresh sources after each mutation.
+  const createReimbursement = async (d: ReimbursementInput) => {
+    const r = await reimbursementsApi.create(d);
+    setReimbursements(p => [r.data, ...p]);
+    refetchSources();
+    return r.data;
+  };
+  const updateReimbursement = async (id: string, d: Partial<ReimbursementInput>) => {
+    const r = await reimbursementsApi.update(id, d);
+    setReimbursements(p => p.map(x => x.id === id ? r.data : x));
+    refetchSources();
+    return r.data;
+  };
+  const deleteReimbursement = async (id: string) => {
+    await reimbursementsApi.delete(id);
+    setReimbursements(p => p.filter(x => x.id !== id));
+    refetchSources();
+  };
+
   // ── Expense CRUD ───────────────────────────────────────────────────────
   const createExpense = async (d: Omit<Expense,"id"|"createdAt"|"category"|"budget"|"source">) => {
     const r = await expensesApi.create(d);
@@ -208,6 +246,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setExpenses(p => [e, ...p]);
     setExpensesTotal(p => p + 1);
     refetchBudgets();
+    refetchSources();
     return e;
   };
   const updateExpense = async (id: string, d: Partial<Expense>) => {
@@ -215,6 +254,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const e = r.data;
     setExpenses(p => p.map(x => x.id === id ? e : x));
     refetchBudgets();
+    refetchSources();
     return e;
   };
   const deleteExpense = async (id: string) => {
@@ -222,6 +262,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setExpenses(p => p.filter(x => x.id !== id));
     setExpensesTotal(p => Math.max(0, p - 1));
     refetchBudgets();
+    refetchSources();
+    // A deleted expense cascade-deletes its reimbursement(s); refresh so they drop from the list.
+    setReimbursements(p => p.filter(r => r.expenseId !== id));
+    if (reimbursementsActive) refetchReimbursements();
   };
 
   return (
@@ -229,15 +273,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
       splitTenders, splitTendersLoading,
       categories, catsLoading, sources, srcsLoading,
       budgets, budgetsLoading,
+      reimbursements, reimbursementsLoading,
       expenses, expensesTotal, expensesLoading,
       expensesHasMore, expensesLoadingMore, loadMoreExpenses, enableExpenses,
-      enableCategories, enableSources, enableSplitTenders,
+      enableCategories, enableSources, enableSplitTenders, enableReimbursements,
       expenseFilters, setExpenseFilters,
-      refetchSplitTenders, refetchCategories, refetchSources, refetchBudgets,
+      refetchSplitTenders, refetchCategories, refetchSources, refetchBudgets, refetchReimbursements,
       createSplitTender, updateSplitTender, deleteSplitTender,
       createCategory, updateCategory, deleteCategory,
       createSource, updateSource, deleteSource,
       createBudget, updateBudget, deleteBudget,
+      createReimbursement, updateReimbursement, deleteReimbursement,
       createExpense, updateExpense, deleteExpense,
     }}>
       {children}

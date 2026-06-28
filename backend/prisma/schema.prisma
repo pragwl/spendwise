@@ -52,6 +52,8 @@ model PaymentSource {
   id            String       @id @default(uuid())
   name          String       @unique
   type          String?
+  // How the source settles: "credit" accrues a bill to pay later; "debit" | "cash" | "wallet" are paid immediately.
+  paymentType   String       @default("debit") @map("payment_type")
   icon          String?
   color         String?
   balance       Decimal?     @db.Decimal(15, 2)
@@ -61,7 +63,9 @@ model PaymentSource {
   splitTenderId String?      @map("split_tender_id")
   splitTender   SplitTender? @relation(fields: [splitTenderId], references: [id], onDelete: SetNull)
 
-  expenses      Expense[]
+  expenses              Expense[]
+  // Reimbursements that landed in this source (e.g. the fuel debit card)
+  reimbursementsReceived Reimbursement[] @relation("ReimbursementDestination")
 
   @@map("payment_sources")
 }
@@ -92,6 +96,8 @@ model Expense {
   notes      String?
   tags       String[]      @default([])
   costType   String        @default("variable") @map("cost_type")
+  // True when this spend is expected to be reimbursed (e.g. fuel charged to a credit card, claimed later).
+  reimbursable Boolean      @default(false)
   createdAt  DateTime      @default(now()) @map("created_at")
   updatedAt  DateTime      @updatedAt      @map("updated_at")
 
@@ -104,10 +110,41 @@ model Expense {
   sourceId   String?        @map("source_id")
   source     PaymentSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
+  reimbursements Reimbursement[] @relation("ExpenseReimbursements")
+
   @@index([date])
   @@index([categoryId])
   @@index([budgetId])
   @@index([sourceId])
   @@index([costType])
+  @@index([reimbursable])
   @@map("expenses")
+}
+
+// An inflow that returns money for a reimbursable expense.
+// e.g. fuel charged to HDFC credit card -> company transfers the amount onto the fuel debit card.
+model Reimbursement {
+  id        String   @id @default(uuid())
+  amount    Decimal  @db.Decimal(15, 2)
+  date      DateTime @db.Date
+  notes     String?
+  // "pending" = claim raised, money not yet received; "received" = money has landed.
+  status    String   @default("received")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  // The original spend being reimbursed (optional — lump-sum claims may not map to one expense).
+  // Cascade: deleting the origin expense removes its reimbursement everywhere (it no longer has a basis).
+  expenseId String?  @map("expense_id")
+  expense   Expense? @relation("ExpenseReimbursements", fields: [expenseId], references: [id], onDelete: Cascade)
+
+  // Where the reimbursed money landed (e.g. the fuel debit card).
+  destinationSourceId String?        @map("destination_source_id")
+  destinationSource   PaymentSource? @relation("ReimbursementDestination", fields: [destinationSourceId], references: [id], onDelete: SetNull)
+
+  @@index([date])
+  @@index([status])
+  @@index([expenseId])
+  @@index([destinationSourceId])
+  @@map("reimbursements")
 }

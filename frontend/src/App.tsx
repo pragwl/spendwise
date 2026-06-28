@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { expensesApi, ExpenseFilters } from "./api/expenses";
+import { sourcesApi } from "./api/sources";
 import { analyticsApi } from "./api/analytics";
-import type { Expense, Budget, Category, PaymentSource, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance } from "./types";
+import type { Expense, Budget, Category, PaymentSource, PaymentType, SourceFinancials, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance, Reimbursement } from "./types";
 import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
@@ -21,10 +22,12 @@ const getSafeDate = (dateStr: string) => {
   const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
   return new Date(y, m - 1, d);
 };
-const getTodaySafe = () => {
+// Local YYYY-MM-DD for <input type="date">. Avoids toISOString() which uses UTC and
+// can roll back to "yesterday" for users east of UTC (e.g. IST) early in the day.
+const todayStr = () => {
   const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
 const T = {
@@ -307,6 +310,7 @@ const NAV = [
   { id:"categories",    label:"Categories",      emoji:"🏷️" },
   { id:"sources",       label:"Payment Sources", emoji:"💳" },
   { id:"split-tenders", label:"Split Tenders",   emoji:"🗂️" },
+  { id:"reimbursements",label:"Reimbursements",  emoji:"🔄" },
   { id:"analytics",     label:"Analytics",       emoji:"📊" },
   { id:"reports",       label:"Reports",         emoji:"📁" },
 ];
@@ -789,11 +793,11 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
 
 // ── EXPENSE FORM MODAL (add + edit) ───────────────────────────────────────
 function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()=>void; expense?:Expense }) {
-  const { categories, budgets, sources, splitTenders, createExpense, updateExpense, updateSource,
+  const { categories, budgets, sources, splitTenders, createExpense, updateExpense,
           enableCategories, enableSources, enableSplitTenders } = useData();
   const mobile = useMobile();
   const isEdit = !!expense;
-  const blank = { title:"", amount:"", date:getTodaySafe().toISOString().slice(0,10), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable" };
+  const blank = { title:"", amount:"", date:todayStr(), categoryId:"", budgetId:"", sourceId:"", notes:"", costType:"variable" as "fixed"|"variable", reimbursable:false };
   const [f, sf] = useState(blank);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -823,6 +827,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
         sourceId:   expense.sourceId   || "",
         notes:      expense.notes      || "",
         costType:   (expense.costType || "variable") as "fixed"|"variable",
+        reimbursable: !!expense.reimbursable,
       } : blank);
       setErr("");
     }
@@ -842,13 +847,10 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
         sourceId:  f.sourceId  ||undefined,
         tags: expense?.tags || [],
         costType: f.costType,
+        reimbursable: f.reimbursable,
       };
       if (isEdit) await updateExpense(expense!.id, payload);
       else         await createExpense(payload);
-
-      if (!isEdit && selectedSource && selectedSource.balance != null) {
-        await updateSource(selectedSource.id, { balance: Number(selectedSource.balance) + expAmt });
-      }
       onClose();
     } catch(e:unknown) { setErr(e instanceof Error ? e.message : "Error"); }
     finally { setSaving(false); }
@@ -883,7 +885,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
             ); })}
           </div>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:11 }}>
+        <div style={{ display:"grid", gridTemplateColumns: mobile?"1fr":"1fr 1fr", gap:11 }}>
           <Sel label="Budget" value={f.budgetId} onChange={e=>sf(p=>({...p,budgetId:e.target.value}))}>
             <option value="">No budget</option>
             {activeBudgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
@@ -894,13 +896,19 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
           </Sel>
         </div>
 
-        {selectedSource && selectedSource.balance != null && f.amount && !isEdit && (
-          <div style={{ padding:"10px 14px", borderRadius:12, background:T.primaryS, border:`1px solid ${T.primary}22`, fontSize:12, color:T.primary, fontWeight:600 }}>
-            Total spent on {selectedSource.name}: {fmt(Number(selectedSource.balance) + Number(f.amount))}
-          </div>
-        )}
-
         {tenderWarning && <ErrMsg msg={tenderWarning} />}
+
+        {/* Reimbursable toggle — flags a spend you expect back (e.g. fuel charged to a card, claimed later). */}
+        <button onClick={()=>sf(p=>({...p,reimbursable:!p.reimbursable}))}
+          style={{ display:"flex", alignItems:"center", gap:11, padding:"11px 14px", borderRadius:12, cursor:"pointer", fontFamily:"inherit", textAlign:"left", width:"100%",
+                   border:`1.5px solid ${f.reimbursable?T.sage:T.line}`, background:f.reimbursable?T.sageS:T.cream }}>
+          <span style={{ width:20, height:20, borderRadius:6, display:"grid", placeItems:"center", flexShrink:0, fontSize:13,
+                         background:f.reimbursable?T.sage:"transparent", border:`1.5px solid ${f.reimbursable?T.sage:T.faint}`, color:"#fff" }}>{f.reimbursable?"✓":""}</span>
+          <span style={{ minWidth:0 }}>
+            <span style={{ display:"block", fontSize:13, fontWeight:700, color:f.reimbursable?T.sage:T.ink }}>🔄 Reimbursable spend</span>
+            <span style={{ display:"block", fontSize:10, color:T.muted, marginTop:2 }}>I expect this money back (e.g. fuel I'll claim). Record the payback under Reimbursements.</span>
+          </span>
+        </button>
 
         {/* Cost type toggle */}
         <div>
@@ -1372,17 +1380,93 @@ function CategoriesScreen() {
 
 // ── SOURCES SCREEN ────────────────────────────────────────────────────────
 const SRC_COLORS = ["#C2623F","#E8A838","#2E9E6B","#9B6DBF","#5B8FD4","#3BAF7E","#E07B5A","#9E9389"];
-type SrcForm = { name:string; type:string; icon:string; color:string; balance:string; splitTenderId:string };
-const blankSrc: SrcForm = { name:"", type:"Cash", icon:"💵", color:"#5B8FD4", balance:"", splitTenderId:"" };
-const SRC_TYPES = [{ value:"Cash", label:"💵 Cash" }, { value:"Wallet", label:"👛 Wallet" }];
+type SrcForm = { name:string; type:string; paymentType:PaymentType; icon:string; color:string; splitTenderId:string; balance:string };
+const blankSrc: SrcForm = { name:"", type:"Cash", paymentType:"debit", icon:"💵", color:"#5B8FD4", splitTenderId:"", balance:"" };
+// How a source settles. Only "credit" accrues a bill you must pay back later.
+const PAYMENT_TYPES: { value:PaymentType; label:string; hint:string }[] = [
+  { value:"credit", label:"💳 Credit card", hint:"Spends accrue a bill you pay the bank later" },
+  { value:"debit",  label:"🏦 Debit card",  hint:"Money leaves immediately; can receive reimbursements" },
+  { value:"cash",   label:"💵 Cash",        hint:"Paid on the spot" },
+  { value:"wallet", label:"👛 Wallet",      hint:"Prepaid wallet balance" },
+];
+
+// Renders the computed money figures for a payment source. The headline figure
+// for a credit card is the bill you still owe the bank, even after a reimbursement
+// has landed in a different source.
+// `scoped` = budget(s) selected, so `fin.spent` is this source's expense total within those budgets.
+function SourceFigures({ fin, paymentType, scoped, budgetLabel }: { fin: SourceFinancials; paymentType: PaymentType; scoped:boolean; budgetLabel:string }) {
+  const rows: { label:string; value:number; tone:string; big?:boolean; hint?:string }[] = [];
+
+  if (paymentType === "credit") {
+    // A credit card's headline is the bill you owe the bank — scoped to the selected budget(s).
+    rows.push({ label:scoped?`Bill to pay · ${budgetLabel}`:"Bill to pay", value:fin.billToPay, tone:fin.billToPay>0?"danger":"sage", big:true,
+                hint:"What you owe the bank for spends on this card" + (scoped?" assigned to the selected budget(s)":"") });
+    if (fin.reimbursableSpent > 0 || fin.claimedBack > 0) {
+      rows.push({ label:"Reimbursed back", value:fin.claimedBack, tone:"sage" });
+      rows.push({ label:"Net out-of-pocket", value:fin.netOutOfPocket, tone:fin.netOutOfPocket>0?"warn":"sage",
+                  hint:"Spent minus what's been reimbursed to you" });
+    }
+    if (fin.pendingReimbursement > 0)
+      rows.push({ label:"Pending claim", value:fin.pendingReimbursement, tone:"warn",
+                  hint:"Reimbursable spend not yet returned" });
+  } else {
+    // Debit / cash / wallet. Balance is ALWAYS all-time (the money on the card now);
+    // only the Expenses line follows the budget filter.
+    const hasBalance = fin.openingBalance > 0 || fin.receivedAll > 0;
+    if (hasBalance) {
+      rows.push({ label:"Current balance", value:fin.currentBalance, tone:fin.currentBalance>=0?"sage":"danger", big:true,
+                  hint:"Money on this source now = opening balance + all reimbursements received − all spending" });
+      if (fin.openingBalance > 0) rows.push({ label:"Opening balance", value:fin.openingBalance, tone:"muted" });
+      if (fin.receivedAll   > 0)  rows.push({ label:"Reimbursement received", value:fin.receivedAll, tone:"sage" });
+    }
+    rows.push({ label:scoped?`Expenses · ${budgetLabel}`:"Expenses", value:fin.spent, tone:hasBalance?"muted":"primary", big:!hasBalance,
+                hint:"Total expenses on this source" + (scoped?" assigned to the selected budget(s)":"") });
+  }
+
+  if (rows.length === 0)
+    return <p style={{ fontSize:11, color:T.faint, marginTop:4 }}>Select a budget to see its expenses, or set an opening balance.</p>;
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:7, marginTop:4 }}>
+      {rows.map((r,i)=>(
+        <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8 }}>
+          <span style={{ fontSize:11, color:T.muted, display:"flex", alignItems:"center" }}>
+            {r.label}{r.hint && <InfoTip text={r.hint} />}
+          </span>
+          <span style={{ fontSize:r.big?16:13, fontWeight:r.big?800:600, color:r.tone==="muted"?T.muted:(toneC[r.tone]||T.ink) }}>{fmt(r.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function SourcesScreen() {
-  const { sources, srcsLoading, splitTenders, createSource, updateSource, deleteSource, enableSources, enableSplitTenders } = useData();
+  const { budgets, splitTenders, createSource, updateSource, deleteSource, enableSources, enableSplitTenders } = useData();
   useEffect(() => { enableSources(); enableSplitTenders(); }, [enableSources, enableSplitTenders]);
   const [modal, setModal] = useState<{open:boolean; source?:PaymentSource}>({open:false});
   const [form, setForm] = useState<SrcForm>(blankSrc);
   const [saving, setSaving] = useState(false);
   const isEdit = !!modal.source;
+
+  // This screen owns its own source fetch so the figures can be scoped to a budget
+  // period, independent of the all-time `sources` the rest of the app uses.
+  const [rows, setRows] = useState<PaymentSource[]>([]);
+  const [rowsLoading, setRowsLoading] = useState(true);
+  const [budgetIds, setBudgetIds] = useState<string[]>([]); // empty = all time
+
+  const activeBudgets = budgets.filter(b => b.status === "active");
+  const selected = budgets.filter(b => budgetIds.includes(b.id));
+  const scoped = selected.length > 0;
+  const budgetLabel = selected.length === 1 ? selected[0].name : `${selected.length} budgets`;
+
+  const idsKey = budgetIds.join(",");
+  const loadRows = useCallback(() => {
+    setRowsLoading(true);
+    sourcesApi.getAll({ budgetIds }).then(r => setRows(r.data ?? [])).catch(console.error).finally(() => setRowsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey]);
+  useEffect(() => { loadRows(); }, [loadRows]);
+
+  const toggleBudget = (id: string) => setBudgetIds(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
 
   useEffect(()=>{
     if (modal.open) {
@@ -1390,10 +1474,12 @@ function SourcesScreen() {
         setForm({
           name:          modal.source.name,
           type:          modal.source.type === "Cash" || modal.source.type === "Wallet" ? modal.source.type : "Cash",
+          paymentType:   modal.source.paymentType || "debit",
           icon:          modal.source.icon    || "💵",
           color:         modal.source.color   || "#5B8FD4",
-          balance:       modal.source.balance != null ? String(Number(modal.source.balance)) : "",
           splitTenderId: modal.source.splitTenderId || "",
+          balance:       modal.source.financials ? String(modal.source.financials.openingBalance)
+                       : modal.source.balance != null ? String(Number(modal.source.balance)) : "",
         });
       } else {
         setForm({ ...blankSrc, splitTenderId: "" });
@@ -1408,27 +1494,57 @@ function SourcesScreen() {
       const payload = {
         name:          form.name,
         type:          form.type || undefined,
+        paymentType:   form.paymentType,
         icon:          form.icon || undefined,
         color:         form.color || undefined,
-        balance:       form.balance ? Number(form.balance) : null,
         splitTenderId: form.splitTenderId || undefined,
+        // Opening balance only applies to non-credit sources.
+        balance:       isCredit ? undefined : (form.balance !== "" ? Number(form.balance) : null),
       };
       if (isEdit) await updateSource(modal.source!.id, payload);
       else         await createSource(payload);
       setModal({open:false});
+      loadRows(); // refresh scoped figures after a source change
     } catch(e:unknown) { alert(e instanceof Error ? e.message : "Error"); }
     finally { setSaving(false); }
   };
 
+  const removeSource = async (id: string) => { await deleteSource(id); loadRows(); };
+
+  const isCredit = form.paymentType === "credit";
+
   return <div>
-    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
+    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:12 }}>
       <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Payment Sources</h1>
       <Btn size="lg" onClick={()=>setModal({open:true})}>+ New source</Btn>
     </div>
-    {srcsLoading ? <Spinner /> : (
+
+    {/* Budget period filter — scopes the bill/spend figures. Balances stay all-time. */}
+    {activeBudgets.length > 0 && (
+      <div style={{ marginBottom:18 }}>
+        <p style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8 }}>
+          Show bills & spend for {scoped ? `${selected.length} budget${selected.length>1?"s":""}` : "all time"}
+        </p>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={()=>setBudgetIds([])}
+            style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${!scoped?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                     background:!scoped?T.primary+"22":"transparent", color:!scoped?T.primary:T.muted }}>All time</button>
+          {activeBudgets.map(b=>{ const on = budgetIds.includes(b.id); return (
+            <button key={b.id} onClick={()=>toggleBudget(b.id)}
+              style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${on?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                       background:on?T.primary+"22":"transparent", color:on?T.primary:T.muted }}>
+              {on?"✓ ":""}{b.name}
+            </button>
+          ); })}
+        </div>
+      </div>
+    )}
+
+    {rowsLoading ? <Spinner /> : (
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))", gap:14 }}>
-        {sources.map(s=>{
-          const bal = s.balance != null ? Number(s.balance) : null;
+        {rows.map(s=>{
+          const pt = s.paymentType || "debit";
+          const ptLabel = PAYMENT_TYPES.find(p=>p.value===pt)?.label || pt;
           return (
           <Card key={s.id}>
             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
@@ -1436,20 +1552,15 @@ function SourcesScreen() {
                 <div style={{ width:44, height:44, borderRadius:13, background:(s.color||T.primary)+"22", display:"grid", placeItems:"center", fontSize:22, flexShrink:0 }}>{s.icon||"💳"}</div>
                 <div>
                   <p style={{ fontWeight:700, color:T.ink, fontSize:14 }}>{s.name}</p>
-                  <p style={{ fontSize:11, color:T.muted }}>{s.type||"—"}{s.splitTender ? ` · 🗂️ ${s.splitTender.name}` : ""}</p>
+                  <p style={{ fontSize:11, color:T.muted }}>{ptLabel}{s.splitTender ? ` · 🗂️ ${s.splitTender.name}` : ""}</p>
                 </div>
               </div>
               <div style={{ display:"flex", gap:6, alignSelf:"flex-start" }}>
                 <IconBtn icon="✏️" onClick={()=>setModal({open:true,source:s})} tone="primary" />
-                <IconBtn icon="✕" onClick={()=>deleteSource(s.id)} tone="danger" />
+                <IconBtn icon="✕" onClick={()=>removeSource(s.id)} tone="danger" />
               </div>
             </div>
-            {bal != null && (
-              <div style={{ marginBottom:6 }}>
-                <p style={{ fontSize:11, color:T.muted }}>Total spent</p>
-                <p style={{ fontSize:16, fontWeight:800, color:T.primary }}>{fmt(bal)}</p>
-              </div>
-            )}
+            {s.financials && <SourceFigures fin={s.financials} paymentType={pt} scoped={scoped} budgetLabel={budgetLabel} />}
           </Card>
         ); })}
       </div>
@@ -1460,16 +1571,24 @@ function SourcesScreen() {
         <Btn onClick={save} full disabled={saving}>{saving?"Saving…":isEdit?"Save changes":"Create"}</Btn>
       </div>}>
       <div style={{ display:"flex", flexDirection:"column", gap:13 }}>
-        <Inp label="Name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. PhonePe Wallet" />
-        <Sel label="Type" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-          {SRC_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}
-        </Sel>
+        <Inp label="Name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. HDFC Credit Card" />
+        <div>
+          <Sel label="Payment type" value={form.paymentType} onChange={e=>setForm(f=>({...f,paymentType:e.target.value as PaymentType}))}>
+            {PAYMENT_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}
+          </Sel>
+          <p style={{ fontSize:10, color:T.faint, marginTop:5 }}>{PAYMENT_TYPES.find(p=>p.value===form.paymentType)?.hint}</p>
+        </div>
         <Sel label="Split Tender" value={form.splitTenderId} onChange={e=>setForm(f=>({...f,splitTenderId:e.target.value}))}>
           <option value="">— Select tender —</option>
           {splitTenders.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
         </Sel>
-        <Inp label="Icon (emoji)" value={form.icon} onChange={e=>setForm(f=>({...f,icon:e.target.value}))} placeholder="💵" />
-        <Inp label="Balance (₹, optional)" type="number" value={form.balance} onChange={e=>setForm(f=>({...f,balance:e.target.value}))} placeholder="Leave blank if unknown" />
+        <Inp label="Icon (emoji)" value={form.icon} onChange={e=>setForm(f=>({...f,icon:e.target.value}))} placeholder="💳" />
+        {!isCredit && (
+          <div>
+            <Inp label="Opening balance (₹)" type="number" value={form.balance} onChange={e=>setForm(f=>({...f,balance:e.target.value}))} placeholder="Money on this source right now" />
+            <p style={{ fontSize:10, color:T.faint, marginTop:5 }}>Current balance = opening balance + reimbursements received − spending. Leave blank if you don't track a balance here.</p>
+          </div>
+        )}
         <div>
           <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", display:"block", marginBottom:8 }}>Color</span>
           <div style={{ display:"flex", gap:9, flexWrap:"wrap" }}>{SRC_COLORS.map(c=><button key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{ width:30, height:30, borderRadius:99, background:c, border:form.color===c?`3px solid ${T.ink}`:"3px solid transparent", cursor:"pointer" }} />)}</div>
@@ -2216,6 +2335,161 @@ function ReportsScreen() {
   </div>;
 }
 
+// ── REIMBURSEMENTS SCREEN ─────────────────────────────────────────────────
+type ReimbForm = { amount:string; date:string; status:"pending"|"received"; expenseId:string; destinationSourceId:string; notes:string };
+const blankReimb: ReimbForm = { amount:"", date:todayStr(), status:"received", expenseId:"", destinationSourceId:"", notes:"" };
+
+function ReimbursementsScreen() {
+  const { reimbursements, reimbursementsLoading, sources, createReimbursement, updateReimbursement,
+          deleteReimbursement, enableReimbursements, enableSources } = useData();
+  const [claimable, setClaimable] = useState<Expense[]>([]);
+  const [modal, setModal] = useState<{open:boolean; item?:Reimbursement}>({open:false});
+  const [form, setForm] = useState<ReimbForm>(blankReimb);
+  const [saving, setSaving] = useState(false);
+  const isEdit = !!modal.item;
+
+  useEffect(() => { enableReimbursements(); enableSources(); }, [enableReimbursements, enableSources]);
+
+  // Load reimbursable expenses so a payback can be linked to its origin spend.
+  const loadClaimable = useCallback(() => {
+    expensesApi.getAll({ reimbursable: true, limit: 200, sortBy: "date", order: "desc" })
+      .then(r => setClaimable(r.data ?? [])).catch(console.error);
+  }, []);
+  useEffect(() => { loadClaimable(); }, [loadClaimable]);
+
+  useEffect(() => {
+    if (!modal.open) return;
+    loadClaimable();
+    setForm(modal.item ? {
+      amount:              String(Number(modal.item.amount)),
+      date:                toDateStr(modal.item.date),
+      status:              modal.item.status,
+      expenseId:           modal.item.expenseId || "",
+      destinationSourceId: modal.item.destinationSourceId || "",
+      notes:               modal.item.notes || "",
+    } : blankReimb);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal]);
+
+  // Picking an origin expense pre-fills the claim amount with what's left to reclaim.
+  const onPickExpense = (id: string) => {
+    const exp = claimable.find(e => e.id === id);
+    setForm(f => ({ ...f, expenseId: id, amount: exp && !f.amount ? String(Number(exp.amount)) : f.amount }));
+  };
+
+  // Hide expenses that already have a RECEIVED reimbursement — they're settled.
+  // (Keep the one this reimbursement is editing so it still shows as selected.)
+  const settledExpenseIds = new Set(
+    reimbursements.filter(r => r.status === "received" && r.expenseId).map(r => r.expenseId as string)
+  );
+  const selectableExpenses = claimable.filter(e => !settledExpenseIds.has(e.id) || e.id === modal.item?.expenseId);
+
+  const save = async () => {
+    if (!form.amount) return;
+    try {
+      setSaving(true);
+      const payload = {
+        amount:              Number(form.amount),
+        date:                form.date,
+        status:              form.status,
+        expenseId:           form.expenseId || null,
+        destinationSourceId: form.destinationSourceId || null,
+        notes:               form.notes || undefined,
+      };
+      if (isEdit) await updateReimbursement(modal.item!.id, payload);
+      else        await createReimbursement(payload);
+      setModal({open:false});
+    } catch(e:unknown) { alert(e instanceof Error ? e.message : "Error"); }
+    finally { setSaving(false); }
+  };
+
+  const received = reimbursements.filter(r => r.status === "received").reduce((s,r)=>s+Number(r.amount),0);
+  const pending  = reimbursements.filter(r => r.status === "pending").reduce((s,r)=>s+Number(r.amount),0);
+
+  return <div>
+    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:18, flexWrap:"wrap", gap:12 }}>
+      <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Reimbursements</h1>
+      <Btn size="lg" onClick={()=>setModal({open:true})}>+ Record reimbursement</Btn>
+    </div>
+    <p style={{ fontSize:13, color:T.muted, marginBottom:18, maxWidth:680 }}>
+      A reimbursement is money coming <b>back</b> to you for a spend you flagged as reimbursable — e.g. fuel charged to a
+      credit card, then refunded onto a fuel debit card. It never counts as an expense, so your budgets stay accurate.
+    </p>
+
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:20 }}>
+      <Card><p style={{ fontSize:11, color:T.muted }}>Received</p><p style={{ fontSize:20, fontWeight:800, color:T.sage }}>{fmt(received)}</p></Card>
+      <Card><p style={{ fontSize:11, color:T.muted }}>Pending claims</p><p style={{ fontSize:20, fontWeight:800, color:T.warn }}>{fmt(pending)}</p></Card>
+    </div>
+
+    {reimbursementsLoading ? <Spinner /> : reimbursements.length === 0 ? (
+      <Card><p style={{ fontSize:13, color:T.muted, textAlign:"center", padding:"20px 0" }}>No reimbursements yet. Record one when money lands back.</p></Card>
+    ) : (
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {reimbursements.map(r=>(
+          <Card key={r.id}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12 }}>
+              <div style={{ minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:16, fontWeight:800, color:T.sage }}>{fmt(Number(r.amount))}</span>
+                  <Badge tone={r.status==="received"?"sage":"warn"}>{r.status==="received"?"✓ Received":"⏳ Pending"}</Badge>
+                  <span style={{ fontSize:11, color:T.faint }}>{toDateStr(r.date)}</span>
+                </div>
+                <p style={{ fontSize:12, color:T.muted, marginTop:6 }}>
+                  {r.expense ? <>For: <b>{r.expense.title}</b>{r.expense.source ? ` (${r.expense.source.icon||""} ${r.expense.source.name})` : ""}</> : "No linked expense"}
+                </p>
+                <p style={{ fontSize:12, color:T.muted, marginTop:2 }}>
+                  {r.destinationSource ? <>Into: {r.destinationSource.icon||"💳"} <b>{r.destinationSource.name}</b></> : "No destination set"}
+                </p>
+                {r.notes && <p style={{ fontSize:11, color:T.faint, marginTop:4 }}>{r.notes}</p>}
+              </div>
+              <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                <IconBtn icon="✏️" onClick={()=>setModal({open:true,item:r})} tone="primary" />
+                <IconBtn icon="✕" onClick={()=>deleteReimbursement(r.id)} tone="danger" />
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    )}
+
+    <Modal open={modal.open} onClose={()=>setModal({open:false})} title={isEdit?"Edit Reimbursement":"Record Reimbursement"}
+      footer={<div style={{ display:"flex", gap:10 }}>
+        <Btn variant="ghost" onClick={()=>setModal({open:false})} full>Cancel</Btn>
+        <Btn onClick={save} full disabled={saving||!form.amount}>{saving?"Saving…":isEdit?"Save changes":"Record"}</Btn>
+      </div>}>
+      <div style={{ display:"flex", flexDirection:"column", gap:13 }}>
+        <Sel label="For which reimbursable expense?" value={form.expenseId} onChange={e=>onPickExpense(e.target.value)}>
+          <option value="">— None / lump sum —</option>
+          {selectableExpenses.map(e=><option key={e.id} value={e.id}>{toDateStr(e.date)} · {e.title} · {fmt(Number(e.amount))}{e.source?` (${e.source.name})`:""}</option>)}
+        </Sel>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:11 }}>
+          <Inp label="Amount (₹)" type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} placeholder="0" />
+          <Inp label="Date" type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} />
+        </div>
+        <Sel label="Received into (destination source)" value={form.destinationSourceId} onChange={e=>setForm(f=>({...f,destinationSourceId:e.target.value}))}>
+          <option value="">— Select source —</option>
+          {sources.map(s=><option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+        </Sel>
+        <div>
+          <span style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", display:"block", marginBottom:8 }}>Status</span>
+          <div style={{ display:"flex", gap:8 }}>
+            {(["received","pending"] as const).map(st=>(
+              <button key={st} onClick={()=>setForm(f=>({...f,status:st}))}
+                style={{ flex:1, padding:"9px 0", borderRadius:11, border:`1.5px solid ${form.status===st?T.primary:T.line}`,
+                         background:form.status===st?T.primaryS:T.cream, color:form.status===st?T.primary:T.muted,
+                         fontWeight:600, fontSize:13, cursor:"pointer", fontFamily:"inherit", textTransform:"capitalize" }}>
+                {st==="received"?"✓ Received":"⏳ Pending"}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize:10, color:T.faint, marginTop:5 }}>Only <b>received</b> reimbursements offset your source figures.</p>
+        </div>
+        <Inp label="Notes (optional)" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="e.g. June fuel claim" />
+      </div>
+    </Modal>
+  </div>;
+}
+
 // ── APP SHELL ─────────────────────────────────────────────────────────────
 const LEFT_TABS  = [
   { id:"dashboard", emoji:"🏠", label:"Home" },
@@ -2229,13 +2503,14 @@ const MORE_NAV = [
   { id:"categories",    emoji:"🏷️", label:"Categories" },
   { id:"sources",       emoji:"💳", label:"Sources" },
   { id:"split-tenders", emoji:"🗂️", label:"Tenders" },
+  { id:"reimbursements",emoji:"🔄", label:"Reimbursements" },
   { id:"reports",       emoji:"📁", label:"Reports" },
 ];
 const MORE_IDS = MORE_NAV.map(m => m.id);
 const PAGE_TITLE: Record<string,string> = {
   dashboard:"Dashboard", budgets:"Budgets", expenses:"Expenses",
   categories:"Categories", sources:"Sources", analytics:"Analytics", reports:"Reports",
-  "split-tenders":"Split Tenders",
+  "split-tenders":"Split Tenders", reimbursements:"Reimbursements",
 };
 
 function AppShell() {
@@ -2282,6 +2557,7 @@ function AppShell() {
     categories:      <CategoriesScreen />,
     sources:         <SourcesScreen />,
     "split-tenders": <SplitTendersScreen />,
+    reimbursements:  <ReimbursementsScreen />,
     analytics:       <AnalyticsScreen onDrillTo={drillTo} />,
     reports:         <ReportsScreen />,
   };
@@ -2430,7 +2706,12 @@ function AppShell() {
         }
         @media(max-width:767px){
           .sw-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+          /* iOS Safari auto-zooms when a focused control has font-size < 16px.
+             Force 16px on mobile so tapping a field never zooms the page. */
+          input,select,textarea{font-size:16px !important}
         }
+        /* Never let any screen scroll sideways on mobile. */
+        html,body{max-width:100%;overflow-x:hidden}
       `}</style>
     </div>
   );

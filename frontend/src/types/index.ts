@@ -23,10 +23,27 @@ export interface Category {
   _count?:   { expenses: number };
 }
 
+export type PaymentType = "credit" | "debit" | "cash" | "wallet";
+
+export interface SourceFinancials {
+  // Spend/bill figures respect the budget filter ("All time" filters nothing).
+  spent:                number;
+  reimbursableSpent:    number;
+  claimedBack:          number;
+  billToPay:            number;
+  netOutOfPocket:       number;
+  pendingReimbursement: number;
+  // Balance figures are always all-time (the money on the source right now).
+  receivedAll:          number;
+  openingBalance:       number;
+  currentBalance:       number;
+}
+
 export interface PaymentSource {
   id:             string;
   name:           string;
   type?:          string;
+  paymentType?:   PaymentType;
   icon?:          string;
   color?:         string;
   balance?:       number | null;
@@ -34,6 +51,21 @@ export interface PaymentSource {
   _count?:        { expenses: number };
   splitTenderId?: string | null;
   splitTender?:   { id: string; name: string } | null;
+  financials?:    SourceFinancials;
+}
+
+export interface Reimbursement {
+  id:                  string;
+  amount:              number;
+  date:                string;
+  notes?:              string;
+  status:              "pending" | "received";
+  expenseId?:          string | null;
+  destinationSourceId?: string | null;
+  expense?:            { id: string; title: string; amount: number; sourceId?: string | null;
+                         source?: { id: string; name: string; icon?: string } | null } | null;
+  destinationSource?:  { id: string; name: string; icon?: string } | null;
+  createdAt:           string;
 }
 
 export interface BudgetMetrics {
@@ -86,6 +118,7 @@ export interface Expense {
   notes?:      string;
   tags:        string[];
   costType?:   "fixed" | "variable";
+  reimbursable?: boolean;
   categoryId?: string;
   budgetId?:   string;
   sourceId?:   string;

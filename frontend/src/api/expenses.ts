@@ -13,6 +13,7 @@ export interface ExpenseFilters {
   limit?:      number;
   offset?:     number;
   costType?:   "fixed" | "variable";
+  reimbursable?: boolean;
 }
 
 export const expensesApi = {

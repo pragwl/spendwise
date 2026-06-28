@@ -5,15 +5,17 @@ import categoryRoutes     from "./categories";
 import sourceRoutes       from "./sources";
 import analyticsRoutes    from "./analytics";
 import splitTenderRoutes  from "./splitTenders";
+import reimbursementRoutes from "./reimbursements";
 
 const router = Router();
 
-router.use("/expenses",      expenseRoutes);
-router.use("/budgets",       budgetRoutes);
-router.use("/categories",    categoryRoutes);
-router.use("/sources",       sourceRoutes);
-router.use("/analytics",     analyticsRoutes);
-router.use("/split-tenders", splitTenderRoutes);
+router.use("/expenses",       expenseRoutes);
+router.use("/budgets",        budgetRoutes);
+router.use("/categories",     categoryRoutes);
+router.use("/sources",        sourceRoutes);
+router.use("/analytics",      analyticsRoutes);
+router.use("/split-tenders",  splitTenderRoutes);
+router.use("/reimbursements", reimbursementRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });

@@ -15,6 +15,7 @@ const ExpenseSchema = z.object({
   sourceId:   z.string().uuid().optional().nullable(),
   tags:       z.array(z.string()).optional(),
   costType:   z.enum(["fixed", "variable"]).optional().default("variable"),
+  reimbursable: z.boolean().optional(),
 });
 
 async function validateSplitTenderMatch(budgetId: string, sourceId: string): Promise<void> {
@@ -66,6 +67,7 @@ export const expenseController = {
         };
       }
       if (req.query.costType) where.costType = String(req.query.costType);
+      if (req.query.reimbursable !== undefined) where.reimbursable = String(req.query.reimbursable) === "true";
       if (search) {
         where.OR = [
           { title: { contains: String(search), mode: "insensitive" } },

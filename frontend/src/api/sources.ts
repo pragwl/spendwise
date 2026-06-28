@@ -2,8 +2,11 @@ import { client } from "./client";
 import type { ApiResponse, PaymentSource } from "../types";
 
 export const sourcesApi = {
-  getAll: () =>
-    client.get<unknown, ApiResponse<PaymentSource[]>>("/sources"),
+  // budgetIds scopes the bill/spend figures to expenses assigned to those budgets.
+  getAll: (params?: { budgetIds?: string[] }) =>
+    client.get<unknown, ApiResponse<PaymentSource[]>>("/sources", {
+      params: params?.budgetIds?.length ? { budgetIds: params.budgetIds.join(",") } : undefined,
+    }),
 
   create: (data: Omit<PaymentSource, "id"|"createdAt"|"_count">) =>
     client.post<unknown, ApiResponse<PaymentSource>>("/sources", data),
