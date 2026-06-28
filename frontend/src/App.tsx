@@ -237,7 +237,7 @@ function InfoTip({ text }: { text: string }) {
 }
 
 // Threshold alert popover — wraps a "⚠️ threshold" badge; hover or click to reveal which tenders hit their alert
-function ThresholdInfo({ alerts, children }: { alerts: BudgetSplitTenderAllocation[]; children: React.ReactNode }) {
+function ThresholdInfo({ alerts, children }: { alerts: (BudgetSplitTenderAllocation & { budgetName?: string })[]; children: React.ReactNode }) {
   const [pos, setPos] = useState<{x:number;y:number}|null>(null);
   const [pinned, setPinned] = useState(false);
   if (alerts.length === 0) return <>{children}</>;
@@ -268,8 +268,8 @@ function ThresholdInfo({ alerts, children }: { alerts: BudgetSplitTenderAllocati
           {alerts.map(ta => {
             const pct = ta.allocatedAmount ? Math.round((ta.spentAmount/ta.allocatedAmount)*100) : 0;
             return (
-              <div key={ta.splitTenderId} style={{ marginTop:6 }}>
-                <p style={{ fontWeight:600 }}>{ta.splitTenderName}</p>
+              <div key={`${ta.budgetName||""}-${ta.splitTenderId}`} style={{ marginTop:6 }}>
+                <p style={{ fontWeight:600 }}>{ta.splitTenderName}{ta.budgetName ? ` · ${ta.budgetName}` : ""}</p>
                 <p style={{ color:"#ffffffcc" }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)} ({pct}%) · alert at {ta.threshold}%</p>
               </div>
             );
@@ -345,9 +345,10 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const pct        = budAmt ? (budSp / budAmt) * 100 : 0;
   const h          = health(pct);
 
-  const alertedTenders = selectedBudget
-    ? (selectedBudget.tenderAnalytics || []).filter(isTenderAlerted)
-    : active.flatMap(b => (b.tenderAnalytics || []).filter(isTenderAlerted));
+  // Keep the budget each alerted tender belongs to, so alerts can name it.
+  const alertedTenders: (BudgetSplitTenderAllocation & { budgetName: string })[] = selectedBudget
+    ? (selectedBudget.tenderAnalytics || []).filter(isTenderAlerted).map(ta => ({ ...ta, budgetName: selectedBudget.name }))
+    : active.flatMap(b => (b.tenderAnalytics || []).filter(isTenderAlerted).map(ta => ({ ...ta, budgetName: b.name })));
 
   const overviewTone = overBudget > 0 ? "danger" : alertedTenders.length > 0 ? "warn" : h.tone;
 
@@ -376,8 +377,8 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
       <div style={{ marginBottom:16, padding:"12px 16px", borderRadius:14, background:T.warnS, border:`1px solid ${T.warn}55` }}>
         <p style={{ fontSize:13, fontWeight:700, color:T.warn, marginBottom:6 }}>⚠️ Tender threshold alerts</p>
         {alertedTenders.map(ta => (
-          <div key={ta.splitTenderId} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4, flexWrap:"wrap" }}>
-            <span style={{ fontSize:12, color:T.warn, fontWeight:600 }}>· {ta.splitTenderName}</span>
+          <div key={`${ta.budgetName}-${ta.splitTenderId}`} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4, flexWrap:"wrap" }}>
+            <span style={{ fontSize:12, color:T.warn, fontWeight:600 }}>· {ta.splitTenderName} <span style={{ fontWeight:500, color:T.warn, opacity:.8 }}>in {ta.budgetName}</span></span>
             <span style={{ fontSize:11, color:T.warn }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)} ({Math.round((ta.spentAmount/ta.allocatedAmount)*100)}%) — at {ta.threshold}%</span>
           </div>
         ))}
