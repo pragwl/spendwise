@@ -826,6 +826,16 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
+  // Debounce the search box → backend filter, so search runs server-side over
+  // the entire expense list (title + notes) rather than only the loaded page.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setExpenseFilters(f => ({ ...f, search: q || undefined }));
+    }, 300);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
   const hasFilter = !!(filters.categoryId || filters.budgetId || filters.sourceId || filters.startDate || filters.endDate || q || activeDowFilter !== null || navCostType || navUnbudgeted || navSpikeDates);
   // Use locally fetched set (multi-budget drill) or DataContext
   const baseExp = localExp ?? expenses;
@@ -834,10 +844,21 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
   const costExp     = navCostType ? dowExp.filter(e => navCostType === "fixed" ? e.costType === "fixed" : e.costType !== "fixed") : dowExp;
   const unbudgExp   = navUnbudgeted ? costExp.filter(e => !e.budgetId) : costExp;
   const spikeExp    = navSpikeDates ? unbudgExp.filter(e => navSpikeDates!.has(e.date.slice(0,10))) : unbudgExp;
-  const filtered    = spikeExp.filter(e => !q || e.title.toLowerCase().includes(q.toLowerCase()));
+  // Backend already applies `search` for the DataContext-driven list. Only the
+  // multi-budget drill (localExp) is fetched without it, so search it locally.
+  const filtered    = localExp !== null
+    ? spikeExp.filter(e => !q || e.title.toLowerCase().includes(q.toLowerCase()) || (e.notes||"").toLowerCase().includes(q.toLowerCase()))
+    : spikeExp;
   const groups = filtered.reduce((m:Record<string,typeof expenses>, e)=>{
     const d = e.date.slice(0,10); if (!m[d]) m[d]=[]; m[d].push(e); return m;
   }, {});
+
+  // Header count: when every active filter is backend-driven, the server's total
+  // is the true count (the list may have only loaded the first page). Client-only
+  // post-filters (day-of-week, cost type, unbudgeted, spike dates, multi-budget
+  // drill) can't be counted without the full set, so fall back to what's loaded.
+  const clientOnlyFilter = localExp !== null || activeDowFilter !== null || !!navCostType || navUnbudgeted || !!navSpikeDates;
+  const displayCount = clientOnlyFilter ? filtered.length : expensesTotal;
 
   // Multi-select analytics — operates on the currently filtered set.
   const selectedExpenses = filtered.filter(e => selected.has(e.id));
@@ -870,7 +891,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
       <div>
         <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Expenses</h1>
-        <p style={{ fontSize:13, color:T.muted, marginTop:5 }}>{filtered.length} transactions</p>
+        <p style={{ fontSize:13, color:T.muted, marginTop:5 }}>{displayCount} transactions</p>
       </div>
       {!mobile && <Btn size="lg" onClick={()=>onOpenExpense()}>+ Add expense</Btn>}
     </div>
@@ -3005,7 +3026,6 @@ function AppShell() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        html,body{height:100%}
         body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;overscroll-behavior:none}
         select,input,button{font-family:'Plus Jakarta Sans',sans-serif}
         button{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
