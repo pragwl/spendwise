@@ -885,7 +885,7 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
     }, { rootMargin: "300px" });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [canPaginate, loadMoreExpenses]);
+  }, [canPaginate, loadMoreExpenses, expensesLoading, filtered.length]);
 
   return <div>
     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
@@ -2586,7 +2586,7 @@ function ReportsScreen() {
     const obs = new IntersectionObserver(es => { if (es[0]?.isIntersecting) loadMore(); }, { rootMargin:"300px" });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [hasMore, loadMore]);
+  }, [hasMore, loadMore, loading, reportExp.length]);
 
   // CSV export streams the FULL dataset straight from the backend (no page cap)
   const downloadCSV = () => {
