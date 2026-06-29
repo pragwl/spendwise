@@ -3049,8 +3049,12 @@ function AppShell() {
              Force 16px on mobile so tapping a field never zooms the page. */
           input,select,textarea{font-size:16px !important}
         }
-        /* Never let any screen scroll sideways on mobile. */
-        html,body{max-width:100%;overflow-x:hidden}
+        /* Clip sideways overflow without making <body> a scroll container.
+           overflow-x:hidden would force overflow-y to compute to 'auto', turning
+           body into a (non-scrolling) scroller that swallows wheel events over
+           content — so the page only scrolled via the scrollbar. 'clip' keeps
+           overflow-y:visible, so wheel/trackpad scroll the document everywhere. */
+        html,body{max-width:100%;overflow-x:clip}
       `}</style>
     </div>
   );
