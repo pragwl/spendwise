@@ -190,11 +190,46 @@ export interface ReportSummary {
   totalSpent:        number;
   totalTransactions: number;
   avgTransaction:    number;
+  minTransaction:    number;
+  maxTransaction:    number;
+  fixedTotal:        number;
+  fixedCount:        number;
+  variableTotal:     number;
+  variableCount:     number;
+  reimbursableTotal: number;
+  reimbursableCount: number;
+  firstDate:         string | null;
+  lastDate:          string | null;
+  spanDays:          number;
+  activeDays:        number;
+  avgPerActiveDay:   number;
+}
+
+export interface ReportGroup {
+  name:  string;
+  icon:  string;
+  color: string;
+  total: number;
+  count: number;
+  pct:   number;
+}
+
+export interface ReportFilters {
+  startDate?:  string;
+  endDate?:    string;
+  categoryId?: string;
+  sourceId?:   string;
+  costType?:   "fixed" | "variable";
+  search?:     string;
 }
 
 export interface ReportResponse {
-  summary:  ReportSummary;
-  expenses: Expense[];
+  summary:    ReportSummary;
+  byCategory: ReportGroup[];
+  bySource:   ReportGroup[];
+  byBudget:   ReportGroup[];
+  monthly:    { year: number; monthNum: number; spend: number; count: number }[];
+  expenses:   Expense[];
 }
 
 export interface AnalysisGroup {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { expensesApi, ExpenseFilters } from "./api/expenses";
 import { sourcesApi } from "./api/sources";
 import { analyticsApi } from "./api/analytics";
-import type { Expense, Budget, Category, PaymentSource, PaymentType, SourceFinancials, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportSummary, DashboardData, BudgetMetrics, BudgetGuidance, Reimbursement, ExpenseAnalysis, AnalysisGroup, CategoryTrend } from "./types";
+import type { Expense, Budget, Category, PaymentSource, PaymentType, SourceFinancials, SplitTender, BudgetSplitTenderAllocation, BudgetAnalytics, ReportResponse, ReportFilters, ReportGroup, DashboardData, BudgetMetrics, BudgetGuidance, Reimbursement, ExpenseAnalysis, AnalysisGroup, CategoryTrend } from "./types";
 import { config as appConfig } from "./config";
 import { DataProvider, useData } from "./context/DataContext";
 import {
@@ -238,6 +238,34 @@ function InfoTip({ text }: { text: string }) {
                       padding:"8px 10px", borderRadius:8, width:190, zIndex:200,
                       boxShadow:"0 4px 16px rgba(0,0,0,.2)", pointerEvents:"none", whiteSpace:"normal" }}>
           {text}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// Note indicator — a 📝 chip rendered next to an expense that has notes;
+// hover (or tap) reveals the note text. Renders nothing when there's no note.
+function NoteTip({ notes }: { notes?: string | null }) {
+  const [show, setShow] = useState(false);
+  if (!notes || !notes.trim()) return null;
+  return (
+    <span style={{ position:"relative", display:"inline-flex", verticalAlign:"middle", flexShrink:0 }}>
+      <span
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+        onClick={e => { e.stopPropagation(); setShow(s => !s); }}
+        title={notes}
+        style={{ width:18, height:18, borderRadius:"50%", background:T.warnS, border:`1px solid ${T.warn}55`,
+                 cursor:"pointer", fontSize:10, color:T.warn,
+                 display:"inline-flex", alignItems:"center", justifyContent:"center", padding:0, lineHeight:1 }}
+      >📝</span>
+      {show && (
+        <div style={{ position:"absolute", bottom:"calc(100% + 6px)", left:"50%", transform:"translateX(-50%)",
+                      background:T.ink, color:"#fff", fontSize:11, lineHeight:1.5,
+                      padding:"8px 10px", borderRadius:8, width:210, zIndex:300,
+                      boxShadow:"0 4px 16px rgba(0,0,0,.2)", whiteSpace:"normal", textAlign:"left" }}>
+          {notes}
         </div>
       )}
     </span>
@@ -545,7 +573,10 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
           : filteredRecent.map(e=><div key={e.id} style={{ display:"flex", alignItems:"center", gap:11, padding:"9px 0", borderBottom:`1px solid ${T.line}` }}>
             <div style={{ width:36, height:36, borderRadius:11, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:18 }}>{e.category?.icon||"💡"}</div>
             <div style={{ flex:1, minWidth:0 }}>
-              <p style={{ fontSize:13, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+              <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                <p style={{ fontSize:13, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+                <NoteTip notes={e.notes} />
+              </div>
               <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
             </div>
             <span style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</span>
@@ -986,7 +1017,10 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
               <Check on={selected.has(e.id)} onClick={()=>toggleSel(e.id)} />
               <div style={{ width:42, height:42, borderRadius:13, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:20, flexShrink:0 }}>{e.category?.icon||"💡"}</div>
               <div style={{ flex:1, minWidth:0 }}>
-                <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+                <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                  <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+                  <NoteTip notes={e.notes} />
+                </div>
                 <p style={{ fontSize:11, color:T.muted }}>{e.category?.name}{e.source?` · ${e.source.icon||""} ${e.source.name}`:""}</p>
               </div>
               <div style={{ textAlign:"right" }}>
@@ -1012,7 +1046,10 @@ function ExpensesScreen({ onOpenExpense, navFilters, onNavFiltersConsumed }: {
                   <Check on={selected.has(e.id)} onClick={()=>toggleSel(e.id)} />
                   <div style={{ width:42, height:42, borderRadius:13, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:20, flexShrink:0 }}>{e.category?.icon||"💡"}</div>
                   <div style={{ flex:1, minWidth:0 }}>
-                    <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+                      <p style={{ fontSize:14, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+                      <NoteTip notes={e.notes} />
+                    </div>
                     <p style={{ fontSize:11, color:T.muted }}>{e.category?.name}{e.source?` · ${e.source.icon||""} ${e.source.name}`:""}</p>
                   </div>
                   <div style={{ textAlign:"right" }}>
@@ -1054,9 +1091,21 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  const activeBudgets = budgets.filter(b => b.status === "active");
   const selectedSource = sources.find(s => s.id === f.sourceId);
   const selectedBudget = budgets.find(b => b.id === f.budgetId);
+
+  // Only active budgets can be picked for a new assignment. But when editing an
+  // expense already tied to a paused/completed budget, keep that budget in the
+  // list (flagged with its status) so it stays visible and isn't silently
+  // dropped on save.
+  const activeBudgets = budgets.filter(b => b.status === "active");
+  const budgetOptions = (() => {
+    if (f.budgetId && !activeBudgets.some(b => b.id === f.budgetId)) {
+      const current = budgets.find(b => b.id === f.budgetId);
+      if (current) return [current, ...activeBudgets];
+    }
+    return activeBudgets;
+  })();
 
   let tenderWarning = "";
   if (f.budgetId && f.sourceId && selectedSource?.splitTenderId && selectedBudget?.tenderAnalytics) {
@@ -1140,7 +1189,7 @@ function ExpenseFormModal({ open, onClose, expense }: { open:boolean; onClose:()
         <div style={{ display:"grid", gridTemplateColumns: mobile?"1fr":"1fr 1fr", gap:11 }}>
           <Sel label="Budget" value={f.budgetId} onChange={e=>sf(p=>({...p,budgetId:e.target.value}))}>
             <option value="">No budget</option>
-            {activeBudgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+            {budgetOptions.map(b=><option key={b.id} value={b.id}>{b.name}{b.status!=="active"?` (${b.status})`:""}</option>)}
           </Sel>
           <Sel label="Paid with" value={f.sourceId} onChange={e=>sf(p=>({...p,sourceId:e.target.value}))}>
             <option value="">Select source</option>
@@ -1784,12 +1833,23 @@ function SourcesScreen() {
   // period, independent of the all-time `sources` the rest of the app uses.
   const [rows, setRows] = useState<PaymentSource[]>([]);
   const [rowsLoading, setRowsLoading] = useState(true);
-  const [budgetIds, setBudgetIds] = useState<string[]>([]); // empty = all time
+  const [budgetIds, setBudgetIds] = useState<string[]>([]);
+  const didInit = useRef(false);
 
-  const activeBudgets = budgets.filter(b => b.status === "active");
+  // Only active & paused budgets are offered here — completed budgets are
+  // closed periods and aren't useful for scoping current bills/spend.
+  const filterBudgets = budgets.filter(b => b.status === "active" || b.status === "paused");
   const selected = budgets.filter(b => budgetIds.includes(b.id));
   const scoped = selected.length > 0;
   const budgetLabel = selected.length === 1 ? selected[0].name : `${selected.length} budgets`;
+
+  // Default to all active & paused budgets selected once budgets have loaded.
+  useEffect(() => {
+    if (!didInit.current && filterBudgets.length > 0) {
+      didInit.current = true;
+      setBudgetIds(filterBudgets.map(b => b.id));
+    }
+  }, [filterBudgets]);
 
   const idsKey = budgetIds.join(",");
   const loadRows = useCallback(() => {
@@ -1800,6 +1860,7 @@ function SourcesScreen() {
   useEffect(() => { loadRows(); }, [loadRows]);
 
   const toggleBudget = (id: string) => setBudgetIds(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
+  const allSelected = filterBudgets.length > 0 && filterBudgets.every(b => budgetIds.includes(b.id));
 
   useEffect(()=>{
     if (modal.open) {
@@ -1852,21 +1913,27 @@ function SourcesScreen() {
       <Btn size="lg" onClick={()=>setModal({open:true})}>+ New source</Btn>
     </div>
 
-    {/* Budget period filter — scopes the bill/spend figures. Balances stay all-time. */}
-    {activeBudgets.length > 0 && (
+    {/* Budget period filter — scopes the bill/spend figures (active & paused
+        budgets only). Balances stay all-time. */}
+    {filterBudgets.length > 0 && (
       <div style={{ marginBottom:18 }}>
-        <p style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8 }}>
-          Show bills & spend for {scoped ? `${selected.length} budget${selected.length>1?"s":""}` : "all time"}
-        </p>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+          <p style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>
+            Show bills & spend for {scoped ? `${selected.length} budget${selected.length>1?"s":""}` : "all time"}
+          </p>
+          <button onClick={()=>setBudgetIds(allSelected ? [] : filterBudgets.map(b=>b.id))}
+            style={{ padding:"5px 12px", borderRadius:20, border:`1px solid ${T.primary}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600, background:"transparent", color:T.primary }}>
+            {allSelected ? "Clear all" : "Select all"}
+          </button>
+        </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <button onClick={()=>setBudgetIds([])}
-            style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${!scoped?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
-                     background:!scoped?T.primary+"22":"transparent", color:!scoped?T.primary:T.muted }}>All time</button>
-          {activeBudgets.map(b=>{ const on = budgetIds.includes(b.id); return (
+          {filterBudgets.map(b=>{ const on = budgetIds.includes(b.id); return (
             <button key={b.id} onClick={()=>toggleBudget(b.id)}
-              style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${on?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+              style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 13px", borderRadius:20, border:`1.5px solid ${on?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
                        background:on?T.primary+"22":"transparent", color:on?T.primary:T.muted }}>
-              {on?"✓ ":""}{b.name}
+              <span style={{ width:14, height:14, borderRadius:5, display:"grid", placeItems:"center", fontSize:9, flexShrink:0,
+                             background:on?T.primary:"transparent", border:`1px solid ${on?T.primary:T.faint}`, color:"#fff" }}>{on?"✓":""}</span>
+              {b.name}{b.status==="paused"?" ⏸":""}
             </button>
           ); })}
         </div>
@@ -2020,15 +2087,28 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const [expLoading, setExpLoading]   = useState(false);
   const didInit = useRef(false);
 
-  const activeBudgets = budgets.filter(b => b.status === "active");
+  // All budgets are selectable here regardless of status — analytics over a
+  // paused or completed budget is just as useful. Grouped by status so the
+  // multi-select stays easy to scan.
+  const STATUS_ORDER = ["active", "paused", "completed"] as const;
+  const STATUS_META: Record<string, { label:string; dot:string }> = {
+    active:    { label:"Active",    dot:T.sage },
+    paused:    { label:"Paused",    dot:T.warn },
+    completed: { label:"Completed", dot:T.faint },
+  };
+  const budgetGroups = STATUS_ORDER
+    .map(s => ({ status: s, items: budgets.filter(b => b.status === s) }))
+    .filter(g => g.items.length > 0);
+  const allSelected = budgets.length > 0 && selBudgets.length === budgets.length;
 
-  // Default to the first active budget once budgets have loaded
+  // Default to the first active budget (or the first budget of any status).
   useEffect(()=>{
-    if (!didInit.current && activeBudgets.length > 0) {
+    if (!didInit.current && budgets.length > 0) {
       didInit.current = true;
-      setSelBudgets([activeBudgets[0].id]);
+      const first = budgets.find(b => b.status === "active") || budgets[0];
+      setSelBudgets([first.id]);
     }
-  }, [activeBudgets]);
+  }, [budgets]);
 
   // Fetch server-computed metrics for the selected budget(s) — all aggregation
   // happens in the backend over the full expense set (no row cap).
@@ -2191,30 +2271,50 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   return <div>
     <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em", marginBottom:20 }}>Analytics</h1>
 
-    {/* Budget filter */}
-    {activeBudgets.length > 0 && (
+    {/* Budget filter — all budgets, grouped by status, multi-select */}
+    {budgets.length > 0 && (
       <Card style={{ marginBottom:18 }}>
-        <p style={{ fontSize:12, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10 }}>Filter by budget</p>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-          {activeBudgets.map(b=>{
-            const sel = selBudgets.includes(b.id);
-            return (
-              <button key={b.id} onClick={()=>toggleBudget(b.id)}
-                style={{ padding:"7px 14px", borderRadius:99, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
-                         background:sel?(b.color||T.primary):T.raised, color:sel?"#fff":T.muted,
-                         border:sel?`1px solid ${b.color||T.primary}`:`1px solid ${T.line}` }}>
-                {b.name}
-              </button>
-            );
-          })}
-          {selBudgets.length > 0 && (
-            <button onClick={()=>setSelBudgets([])}
-              style={{ padding:"7px 14px", borderRadius:99, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", background:"transparent", color:T.primary, border:`1px solid ${T.primary}` }}>
-              ✕ Clear
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+          <p style={{ fontSize:12, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>Filter by budget</p>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={()=>setSelBudgets(allSelected ? [] : budgets.map(b=>b.id))}
+              style={{ padding:"5px 12px", borderRadius:20, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", background:"transparent", color:T.primary, border:`1px solid ${T.primary}` }}>
+              {allSelected ? "Clear all" : "Select all"}
             </button>
-          )}
+            {!allSelected && selBudgets.length > 0 && (
+              <button onClick={()=>setSelBudgets([])}
+                style={{ padding:"5px 12px", borderRadius:20, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", background:"transparent", color:T.muted, border:`1px solid ${T.line}` }}>
+                ✕ Clear
+              </button>
+            )}
+          </div>
         </div>
-        {selBudgets.length > 0 && <p style={{ fontSize:11, color:T.muted, marginTop:8 }}>Combined data for {selBudgets.length} budget{selBudgets.length>1?"s":""}</p>}
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          {budgetGroups.map(g=>(
+            <div key={g.status}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:7 }}>
+                <span style={{ width:7, height:7, borderRadius:99, background:STATUS_META[g.status].dot }} />
+                <span style={{ fontSize:11, fontWeight:700, color:T.muted }}>{STATUS_META[g.status].label} · {g.items.length}</span>
+              </div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                {g.items.map(b=>{
+                  const sel = selBudgets.includes(b.id);
+                  return (
+                    <button key={b.id} onClick={()=>toggleBudget(b.id)}
+                      style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 14px", borderRadius:99, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+                               background:sel?(b.color||T.primary):T.raised, color:sel?"#fff":T.muted,
+                               border:sel?`1px solid ${b.color||T.primary}`:`1px solid ${T.line}` }}>
+                      <span style={{ width:14, height:14, borderRadius:5, display:"grid", placeItems:"center", fontSize:9, flexShrink:0,
+                                     background:sel?"#ffffff33":"transparent", border:`1px solid ${sel?"#ffffff88":T.faint}`, color:"#fff" }}>{sel?"✓":""}</span>
+                      {b.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        {selBudgets.length > 0 && <p style={{ fontSize:11, color:T.muted, marginTop:10 }}>Combined data for {selBudgets.length} budget{selBudgets.length>1?"s":""}</p>}
       </Card>
     )}
 
@@ -2535,48 +2635,121 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
 
 // ── REPORTS SCREEN ────────────────────────────────────────────────────────
 const REPORT_PAGE = 50;
+
+// Date-range presets. Each returns an inclusive {startDate, endDate} as
+// YYYY-MM-DD (local), computed at click time. "all" clears the range.
+const rpPad = (n:number) => String(n).padStart(2,"0");
+const rpYmd = (d:Date) => `${d.getFullYear()}-${rpPad(d.getMonth()+1)}-${rpPad(d.getDate())}`;
+const REPORT_PRESETS: { key:string; label:string }[] = [
+  { key:"all",         label:"All time" },
+  { key:"thisMonth",   label:"This month" },
+  { key:"lastMonth",   label:"Last month" },
+  { key:"last30",      label:"Last 30 days" },
+  { key:"last90",      label:"Last 90 days" },
+  { key:"thisQuarter", label:"This quarter" },
+  { key:"thisYear",    label:"This year" },
+  { key:"lastYear",    label:"Last year" },
+];
+function reportPresetRange(key:string): { startDate:string; endDate:string } {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  switch (key) {
+    case "thisMonth":   return { startDate: rpYmd(new Date(y, m, 1)),     endDate: rpYmd(new Date(y, m+1, 0)) };
+    case "lastMonth":   return { startDate: rpYmd(new Date(y, m-1, 1)),   endDate: rpYmd(new Date(y, m, 0)) };
+    case "last30":      { const s = new Date(now); s.setDate(s.getDate()-29); return { startDate: rpYmd(s), endDate: rpYmd(now) }; }
+    case "last90":      { const s = new Date(now); s.setDate(s.getDate()-89); return { startDate: rpYmd(s), endDate: rpYmd(now) }; }
+    case "thisQuarter": { const q = Math.floor(m/3); return { startDate: rpYmd(new Date(y, q*3, 1)), endDate: rpYmd(new Date(y, q*3+3, 0)) }; }
+    case "thisYear":    return { startDate: `${y}-01-01`,   endDate: `${y}-12-31` };
+    case "lastYear":    return { startDate: `${y-1}-01-01`, endDate: `${y-1}-12-31` };
+    default:            return { startDate: "", endDate: "" };
+  }
+}
+
+// A single "by X" breakdown card: ranked rows with a share bar. All figures
+// (totals, %) are computed server-side; this only renders them.
+function ReportBreakdown({ title, rows, limit=8 }: { title:string; rows:ReportGroup[]; limit?:number }) {
+  if (rows.length === 0) return null;
+  return (
+    <Card>
+      <span style={{ fontWeight:700, fontSize:15, color:T.ink, display:"block", marginBottom:14 }}>{title}</span>
+      <div style={{ display:"flex", flexDirection:"column", gap:11 }}>
+        {rows.slice(0, limit).map((r,i)=>(
+          <div key={i}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4 }}>
+              <span style={{ fontSize:13, color:T.ink, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.icon} {r.name} <span style={{ color:T.faint, fontWeight:500 }}>· {r.count}</span></span>
+              <span style={{ fontSize:13, fontWeight:700, color:T.ink, flexShrink:0 }}>{fmt(r.total)} <span style={{ color:T.faint, fontWeight:500 }}>{r.pct}%</span></span>
+            </div>
+            <div style={{ height:6, borderRadius:99, background:T.line, overflow:"hidden" }}>
+              <div style={{ height:"100%", width:`${Math.min(100,r.pct)}%`, background:r.color, borderRadius:99 }} />
+            </div>
+          </div>
+        ))}
+        {rows.length > limit && <p style={{ fontSize:11, color:T.faint }}>+ {rows.length-limit} more</p>}
+      </div>
+    </Card>
+  );
+}
+
 function ReportsScreen() {
-  const { budgets } = useData();
-  const [selBudgetId, setSelBudgetId] = useState("");
-  const [summary, setSummary]         = useState<ReportSummary|null>(null);
+  const mobile = useMobile();
+  const { categories, sources, enableCategories, enableSources } = useData();
+  useEffect(() => { enableCategories(); enableSources(); }, [enableCategories, enableSources]);
+
+  const [preset, setPreset]   = useState("all");
+  const [filters, setFilters] = useState<ReportFilters>({});
+  const [data, setData]       = useState<ReportResponse|null>(null);
   const [reportExp, setReportExp]     = useState<Expense[]>([]);
   const [total, setTotal]             = useState(0);
   const [loading, setLoading]         = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const didInit = useRef(false);
 
-  const allBudgets = budgets;
+  // Apply a date-range preset (or clear it). Other filters are preserved.
+  const applyPreset = (key:string) => {
+    setPreset(key);
+    const { startDate, endDate } = reportPresetRange(key);
+    setFilters(f => ({ ...f, startDate: startDate || undefined, endDate: endDate || undefined }));
+  };
+  // Manual date edits switch the preset to "custom".
+  const setDate = (which:"startDate"|"endDate", v:string) => {
+    setPreset("custom");
+    setFilters(f => ({ ...f, [which]: v || undefined }));
+  };
 
-  // Default to the first budget once budgets have loaded
+  const hasFilter = !!(filters.startDate || filters.endDate || filters.categoryId || filters.sourceId || filters.costType || filters.search);
+
+  // Search box → debounced filter, so it runs server-side over the full set.
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setFilters(f => ({ ...f, search: q || undefined })), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Summary + breakdowns (over ALL matching rows) + first page of the table.
+  const filterKey = JSON.stringify(filters);
   useEffect(()=>{
-    if (!didInit.current && allBudgets.length > 0) {
-      didInit.current = true;
-      setSelBudgetId(allBudgets[0].id);
-    }
-  }, [allBudgets]);
-
-  // Summary metrics (over ALL rows) + first page of the table, computed server-side
-  useEffect(()=>{
-    if (!selBudgetId) { setSummary(null); setReportExp([]); setTotal(0); setLoading(false); return; }
+    let live = true;
     setLoading(true);
-    analyticsApi.getReport(selBudgetId, REPORT_PAGE, 0)
-      .then(r => { setSummary(r.data.summary); setReportExp(r.data.expenses); setTotal(r.meta?.total ?? r.data.expenses.length); })
+    analyticsApi.getReport(filters, REPORT_PAGE, 0)
+      .then(r => { if (!live) return; setData(r.data); setReportExp(r.data.expenses); setTotal(r.meta?.total ?? r.data.expenses.length); })
       .catch(console.error)
-      .finally(()=>setLoading(false));
-  }, [selBudgetId]);
+      .finally(()=>{ if (live) setLoading(false); });
+    return () => { live = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
 
+  const summary = data?.summary ?? null;
   const hasMore = reportExp.length < total;
   const loadMore = useCallback(()=>{
-    if (loadingMore || !selBudgetId || reportExp.length >= total) return;
+    if (loadingMore || reportExp.length >= total) return;
     setLoadingMore(true);
-    analyticsApi.getReport(selBudgetId, REPORT_PAGE, reportExp.length)
+    analyticsApi.getReport(filters, REPORT_PAGE, reportExp.length)
       .then(r => setReportExp(prev => {
         const seen = new Set(prev.map(e=>e.id));
         return [...prev, ...r.data.expenses.filter(e=>!seen.has(e.id))];
       }))
       .catch(console.error)
       .finally(()=>setLoadingMore(false));
-  }, [loadingMore, selBudgetId, reportExp.length, total]);
+  }, [loadingMore, filterKey, reportExp.length, total]);
 
   const sentinelRef = useRef<HTMLDivElement|null>(null);
   useEffect(()=>{
@@ -2588,67 +2761,163 @@ function ReportsScreen() {
     return () => obs.disconnect();
   }, [hasMore, loadMore, loading, reportExp.length]);
 
-  // CSV export streams the FULL dataset straight from the backend (no page cap)
+  // CSV export streams the FULL filtered dataset straight from the backend.
   const downloadCSV = () => {
-    if (!selBudgetId) return;
     const a = document.createElement("a");
-    a.href = analyticsApi.reportCsvUrl(selBudgetId);
-    a.download = "spendwise-export.csv";
+    a.href = analyticsApi.reportCsvUrl(filters);
+    a.download = "spendwise-report.csv";
     document.body.appendChild(a); a.click(); a.remove();
   };
 
+  const dateLabel = (k:string|null|undefined) => k ? getSafeDate(k).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"}) : "—";
+  const rangeText = summary && summary.firstDate
+    ? `${dateLabel(summary.firstDate)} → ${dateLabel(summary.lastDate)}`
+    : "—";
+
+  type KpiCard = { l:string; v:string; t:string; sub?:string };
+  const kpis: KpiCard[] = summary ? [
+    { l:"Total spent",     v:fmt(summary.totalSpent),       t:"primary", sub:`${summary.totalTransactions} transaction${summary.totalTransactions===1?"":"s"}` },
+    { l:"Avg/transaction", v:fmt(summary.avgTransaction),   t:"sage",    sub:`min ${fmt(summary.minTransaction)} · max ${fmt(summary.maxTransaction)}` },
+    { l:"Avg/active day",  v:fmt(summary.avgPerActiveDay),  t:"sky",     sub:`${summary.activeDays} active of ${summary.spanDays} day${summary.spanDays===1?"":"s"}` },
+    { l:"Fixed vs variable", v:`${fmt(summary.fixedTotal)} / ${fmt(summary.variableTotal)}`, t:"warn", sub:`${summary.fixedCount} fixed · ${summary.variableCount} variable` },
+  ] : [];
+
+  const RP_MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const monthlyRows = (data?.monthly ?? []).map(m => ({ month: `${RP_MONTHS[m.monthNum]} '${String(m.year).slice(2)}`, spend: m.spend }));
+
   return <div>
-    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
-      <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Reports</h1>
-      <Btn size="lg" onClick={downloadCSV} disabled={!selBudgetId}>⬇ Export CSV</Btn>
+    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:12 }}>
+      <div>
+        <h1 style={{ fontWeight:800, fontSize:"clamp(22px,4vw,30px)", color:T.ink, letterSpacing:"-.02em" }}>Reports</h1>
+        <p style={{ fontSize:13, color:T.muted, marginTop:5 }}>{total} transaction{total===1?"":"s"} · {rangeText}</p>
+      </div>
+      <Btn size="lg" onClick={downloadCSV} disabled={total===0}>⬇ Export CSV</Btn>
     </div>
 
-    {/* Budget filter */}
+    {/* Filters: date-range presets + custom range + category/source/cost type + search */}
     <Card style={{ marginBottom:18 }}>
-      <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <span style={{ fontSize:12, fontWeight:700, color:T.muted }}>Filter by budget:</span>
-        <div style={{ position:"relative", flex:1, minWidth:180 }}>
-          <select value={selBudgetId} onChange={e=>setSelBudgetId(e.target.value)}
-            style={{ width:"100%", padding:"9px 28px 9px 12px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:13, cursor:"pointer", outline:"none", fontFamily:"inherit", appearance:"none" }}>
-            <option value="">Select a budget…</option>
-            {allBudgets.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <span style={{ position:"absolute", right:9, top:"50%", transform:"translateY(-50%)", color:T.faint, pointerEvents:"none" }}>▾</span>
+      <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <p style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8 }}>Date range</p>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+            {REPORT_PRESETS.map(p=>{
+              const on = preset === p.key;
+              return (
+                <button key={p.key} onClick={()=>applyPreset(p.key)}
+                  style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${on?T.primary:T.line}`, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                           background:on?T.primary+"22":"transparent", color:on?T.primary:T.muted }}>
+                  {p.label}
+                </button>
+              );
+            })}
+            {preset === "custom" && (
+              <span style={{ padding:"6px 13px", borderRadius:20, border:`1.5px solid ${T.primary}`, fontSize:12, fontWeight:600, background:T.primary+"22", color:T.primary }}>Custom</span>
+            )}
+          </div>
         </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:mobile?"1fr 1fr":"1fr 1fr 1fr 1fr", gap:8 }}>
+          <input type="date" value={filters.startDate||""} onChange={e=>setDate("startDate",e.target.value)}
+            style={{ padding:"9px 10px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:filters.startDate?T.ink:T.faint, fontSize:12, outline:"none", fontFamily:"inherit", width:"100%" }} />
+          <input type="date" value={filters.endDate||""} onChange={e=>setDate("endDate",e.target.value)}
+            style={{ padding:"9px 10px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:filters.endDate?T.ink:T.faint, fontSize:12, outline:"none", fontFamily:"inherit", width:"100%" }} />
+          <FSel value={filters.categoryId||""} onChange={v=>setFilters(f=>({...f,categoryId:v||undefined}))}>
+            <option value="">All categories</option>
+            {categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+          </FSel>
+          <FSel value={filters.sourceId||""} onChange={v=>setFilters(f=>({...f,sourceId:v||undefined}))}>
+            <option value="">All sources</option>
+            {sources.map(s=><option key={s.id} value={s.id}>{s.icon||"💳"} {s.name}</option>)}
+          </FSel>
+        </div>
+
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+          <span style={{ fontSize:12, color:T.muted, fontWeight:600 }}>Cost type:</span>
+          {([["",""],["fixed","📌 Fixed"],["variable","📊 Variable"]] as const).map(([val,lbl])=>{
+            const on = (filters.costType||"") === val;
+            return (
+              <button key={val||"all"} onClick={()=>setFilters(f=>({...f,costType:(val||undefined) as ReportFilters["costType"]}))}
+                style={{ padding:"5px 12px", borderRadius:20, border:`1.5px solid ${on?T.primary:T.line}`, background:on?T.primary+"22":"transparent", color:on?T.primary:T.muted, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+                {val ? lbl : "All"}
+              </button>
+            );
+          })}
+          <div style={{ position:"relative", flex:1, minWidth:160, marginLeft:"auto" }}>
+            <span style={{ position:"absolute", left:11, top:"50%", transform:"translateY(-50%)", color:T.faint, fontSize:12 }}>🔍</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search title or notes…"
+              style={{ width:"100%", padding:"9px 12px 9px 32px", borderRadius:11, border:`1px solid ${T.line}`, background:T.cream, color:T.ink, fontSize:13, outline:"none", fontFamily:"inherit" }} />
+          </div>
+        </div>
+
+        {hasFilter && (
+          <button onClick={()=>{ setFilters({}); setPreset("all"); setQ(""); }}
+            style={{ fontSize:12, color:T.primary, background:"none", border:"none", cursor:"pointer", textAlign:"left", fontFamily:"inherit", padding:0 }}>
+            ✕ Clear all filters
+          </button>
+        )}
       </div>
     </Card>
 
-    {!selBudgetId ? (
+    {loading ? <Spinner /> : total === 0 ? (
       <Card style={{ padding:"44px 20px", textAlign:"center" }}>
         <p style={{ fontSize:30, marginBottom:8 }}>📁</p>
-        <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No budget selected</p>
-        <p style={{ fontSize:13, color:T.muted }}>Select a budget above to view its report.</p>
+        <p style={{ fontSize:15, fontWeight:700, color:T.ink, marginBottom:4 }}>No expenses found</p>
+        <p style={{ fontSize:13, color:T.muted }}>No transactions match the selected filters. Try widening the date range.</p>
       </Card>
     ) : (<>
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))", gap:13, marginBottom:18 }}>
-      {[{l:"Total spent",v:fmt(summary?.totalSpent??0),t:"primary"},{l:"Transactions",v:String(summary?.totalTransactions??0),t:"sky"},{l:"Avg/transaction",v:fmt(summary?.avgTransaction??0),t:"sage"}].map(s=>
-        <div key={s.l} style={{ borderRadius:16, border:`1px solid ${T.line}`, padding:"14px 16px", background:T.paper }}>
-          <p style={{ fontSize:11, color:T.muted }}>{s.l}</p>
-          <p style={{ fontWeight:800, fontSize:22, color:toneC[s.t], marginTop:4 }}>{s.v}</p>
-        </div>
-      )}
-    </div>
+      {/* Summary KPIs */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:13, marginBottom:18 }}>
+        {kpis.map(s=>(
+          <div key={s.l} style={{ borderRadius:16, border:`1px solid ${T.line}`, padding:"14px 16px", background:T.paper }}>
+            <p style={{ fontSize:11, color:T.muted }}>{s.l}</p>
+            <p style={{ fontWeight:800, fontSize:s.l==="Fixed vs variable"?16:22, color:toneC[s.t], marginTop:4, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.v}</p>
+            {s.sub && <p style={{ fontSize:10, color:T.faint, marginTop:3 }}>{s.sub}</p>}
+          </div>
+        ))}
+      </div>
 
-    {loading ? <Spinner /> : (
+      {/* Monthly trend */}
+      {monthlyRows.length > 1 && (
+        <Card style={{ marginBottom:18 }}>
+          <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>Monthly trend</span>
+          <ResponsiveContainer width="100%" height={mobile?140:200}>
+            <AreaChart data={monthlyRows}>
+              <defs><linearGradient id="rpg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={T.primary} stopOpacity={.2}/><stop offset="95%" stopColor={T.primary} stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+              <XAxis dataKey="month" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
+              <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} />
+              <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
+              <Area type="monotone" dataKey="spend" name="Spent" stroke={T.primary} strokeWidth={2.5} fill="url(#rpg)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
+
+      {/* Breakdowns */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:18, marginBottom:18 }}>
+        <ReportBreakdown title="By category" rows={data?.byCategory ?? []} />
+        <ReportBreakdown title="By payment source" rows={data?.bySource ?? []} />
+        {(data?.byBudget?.length ?? 0) > 1 && <ReportBreakdown title="By budget" rows={data?.byBudget ?? []} />}
+      </div>
+
+      {/* Expense table */}
       <Card>
-        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>All expenses{selBudgetId ? ` · ${allBudgets.find(b=>b.id===selBudgetId)?.name||""}` : ""}</span>
+        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"block", marginBottom:14 }}>Transactions</span>
         <div className="sw-table-wrap">
         <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, minWidth:380 }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.line}` }}>
-              {["Title","Category","Budget","Amount","Date"].map(h=><th key={h} style={{ textAlign:h==="Amount"||h==="Date"?"right":"left", padding:"7px 4px", fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>{h}</th>)}
+              {["Title","Category","Source","Budget","Amount","Date"].map(h=><th key={h} style={{ textAlign:h==="Amount"||h==="Date"?"right":"left", padding:"7px 4px", fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em" }}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {reportExp.map(e=>(
               <tr key={e.id} style={{ borderBottom:`1px solid ${T.line}` }}>
-                <td style={{ padding:"10px 4px", fontWeight:600, color:T.ink }}>{e.title}</td>
+                <td style={{ padding:"10px 4px", fontWeight:600, color:T.ink }}>
+                  <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}>{e.title}<NoteTip notes={e.notes} /></span>
+                </td>
                 <td style={{ padding:"10px 4px", color:T.muted }}>{e.category?.name||"—"}</td>
+                <td style={{ padding:"10px 4px", color:T.muted }}>{e.source?.name||"—"}</td>
                 <td style={{ padding:"10px 4px", color:T.muted }}>{e.budget?.name||"—"}</td>
                 <td style={{ padding:"10px 4px", textAlign:"right", fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</td>
                 <td style={{ padding:"10px 4px", textAlign:"right", color:T.muted }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"2-digit"})}</td>
@@ -2657,7 +2926,6 @@ function ReportsScreen() {
           </tbody>
         </table>
         </div>
-        {reportExp.length === 0 && <p style={{ fontSize:13, color:T.muted, padding:8 }}>No expenses found.</p>}
         {reportExp.length > 0 && (
           <div ref={sentinelRef} style={{ padding:"14px 0 4px", textAlign:"center" }}>
             {loadingMore
@@ -2668,7 +2936,6 @@ function ReportsScreen() {
           </div>
         )}
       </Card>
-    )}
     </>)}
   </div>;
 }

@@ -543,54 +543,135 @@ export const analyticsController = {
     } catch (err) { next(err); }
   },
 
-  // Report screen: summary metrics over ALL matching expenses + a paginated
-  // page of rows for the table. `format=csv` streams the full dataset.
+  // Report screen: rich, professional report over an arbitrary date range and
+  // optional category / source / cost-type / text filters. ALL summary metrics
+  // and breakdowns are computed server-side over the full matching set (no row
+  // cap); the table is paginated for display. `format=csv` streams everything.
+  //
+  // Query params: startDate, endDate, categoryId, sourceId, costType, search,
+  // budgetId (optional), limit, offset, format.
   async getReport(req: Request, res: Response, next: NextFunction) {
     try {
-      const { budgetId, format } = req.query;
+      const { budgetId, categoryId, sourceId, costType, search, format } = req.query;
+      const startDate = req.query.startDate ? String(req.query.startDate) : "";
+      const endDate   = req.query.endDate   ? String(req.query.endDate)   : "";
+
       const where: Record<string, unknown> = {};
-      if (budgetId) where.budgetId = String(budgetId);
+      if (budgetId)   where.budgetId   = String(budgetId);
+      if (categoryId) where.categoryId = String(categoryId);
+      if (sourceId)   where.sourceId   = String(sourceId);
+      if (costType === "fixed" || costType === "variable") where.costType = String(costType);
+      if (startDate || endDate) {
+        where.date = {
+          ...(startDate ? { gte: new Date(startDate) } : {}),
+          ...(endDate   ? { lte: new Date(endDate)   } : {}),
+        };
+      }
+      if (search) {
+        where.OR = [
+          { title: { contains: String(search), mode: "insensitive" } },
+          { notes: { contains: String(search), mode: "insensitive" } },
+        ];
+      }
+
+      // One authoritative load of the full matching set — drives the summary,
+      // every breakdown, the CSV, and (sliced) the paginated table.
+      const rows = await prisma.expense.findMany({
+        where,
+        orderBy: { date: "desc" },
+        include: { category: true, budget: true, source: true },
+      });
 
       if (format === "csv") {
-        const rows = await prisma.expense.findMany({
-          where,
-          orderBy: { date: "desc" },
-          include: { category: true, budget: true, source: true },
-        });
-        const header = ["Title", "Amount", "Date", "Category", "Budget", "Source", "Notes"];
+        const header = ["Title", "Amount", "Date", "Category", "Budget", "Source", "Cost type", "Reimbursable", "Notes"];
         const esc = (x: unknown) => `"${String(x ?? "").replace(/"/g, '""')}"`;
         const csv = [
           header.map(esc).join(","),
           ...rows.map(e => [
             e.title, Number(e.amount), dateKey(e.date),
-            e.category?.name || "", e.budget?.name || "", e.source?.name || "", e.notes || "",
+            e.category?.name || "", e.budget?.name || "", e.source?.name || "",
+            e.costType || "", e.reimbursable ? "yes" : "no", e.notes || "",
           ].map(esc).join(",")),
         ].join("\n");
         res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", 'attachment; filename="spendwise-export.csv"');
+        res.setHeader("Content-Disposition", 'attachment; filename="spendwise-report.csv"');
         return res.status(200).send(csv);
       }
 
+      const amt = (e: typeof rows[number]) => Number(e.amount);
+      const total = rows.reduce((s, e) => s + amt(e), 0);
+      const n = rows.length;
+      const amounts = rows.map(amt);
+
+      // Fixed / variable / reimbursable composition
+      const fixedRows    = rows.filter(e => e.costType === "fixed");
+      const variableRows = rows.filter(e => e.costType !== "fixed");
+      const reimbRows    = rows.filter(e => e.reimbursable);
+      const fixedTotal    = fixedRows.reduce((s, e) => s + amt(e), 0);
+      const variableTotal = variableRows.reduce((s, e) => s + amt(e), 0);
+      const reimbursableTotal = reimbRows.reduce((s, e) => s + amt(e), 0);
+
+      // Date span + activity (only meaningful when there are rows)
+      const keys = rows.map(e => dateKey(e.date)).sort();
+      const first = keys[0] || null;
+      const last  = keys[keys.length - 1] || null;
+      const spanDays = first && last ? Math.round((dayMs(last) - dayMs(first)) / 86400000) + 1 : 0;
+      const activeDays = new Set(keys).size;
+
+      // Breakdown grouping (sorted desc by total, with % of grand total)
+      type Grp = { name: string; icon: string; color: string; total: number; count: number; pct: number };
+      const groupBy = (
+        keyFn:  (e: typeof rows[number]) => string,
+        metaFn: (e: typeof rows[number]) => { name: string; icon: string; color: string }
+      ): Grp[] => {
+        const m = new Map<string, Grp>();
+        for (const e of rows) {
+          const k = keyFn(e);
+          const cur = m.get(k) || { ...metaFn(e), total: 0, count: 0, pct: 0 };
+          cur.total += amt(e); cur.count++;
+          m.set(k, cur);
+        }
+        return [...m.values()]
+          .map(g => ({ ...g, pct: total > 0 ? Math.round((g.total / total) * 100) : 0 }))
+          .sort((a, b) => b.total - a.total);
+      };
+
+      const byCategory = groupBy(e => e.categoryId || "__none", e => ({ name: e.category?.name || "Uncategorized", icon: e.category?.icon || "💡", color: e.category?.color || "#7A6E68" }));
+      const bySource   = groupBy(e => e.sourceId   || "__none", e => ({ name: e.source?.name   || "No source",      icon: e.source?.icon   || "💳", color: e.source?.color || "#2563A8" }));
+      const byBudget   = groupBy(e => e.budgetId   || "__none", e => ({ name: e.budget?.name   || "Unbudgeted",     icon: "💰",                  color: e.budget?.color || "#2E7D5E" }));
+
+      // Monthly trend across the matching set (chronological)
+      const monthlyMap = new Map<string, number>();
+      for (const e of rows) {
+        const mk = dateKey(e.date).slice(0, 7);
+        monthlyMap.set(mk, (monthlyMap.get(mk) || 0) + amt(e));
+      }
+      const monthly = [...monthlyMap.keys()].sort().map(mk => {
+        const [year, monthNum] = mk.split("-").map(Number);
+        return { year, monthNum, spend: monthlyMap.get(mk)!, count: rows.filter(e => dateKey(e.date).slice(0, 7) === mk).length };
+      });
+
       const limit  = Math.min(parseInt(String(req.query.limit || 50), 10), 200);
       const offset = parseInt(String(req.query.offset || 0), 10);
-
-      const [agg, expenses, total] = await Promise.all([
-        prisma.expense.aggregate({ where, _sum: { amount: true }, _count: true, _avg: { amount: true } }),
-        prisma.expense.findMany({
-          where, orderBy: { date: "desc" }, take: limit, skip: offset,
-          include: { category: true, budget: true, source: true },
-        }),
-        prisma.expense.count({ where }),
-      ]);
+      const expenses = rows.slice(offset, offset + limit);
 
       return sendSuccess(res, {
         summary: {
-          totalSpent: Number(agg._sum.amount || 0),
-          totalTransactions: agg._count,
-          avgTransaction: Number(agg._avg.amount || 0),
+          totalSpent: total,
+          totalTransactions: n,
+          avgTransaction: n > 0 ? total / n : 0,
+          minTransaction: n > 0 ? Math.min(...amounts) : 0,
+          maxTransaction: n > 0 ? Math.max(...amounts) : 0,
+          fixedTotal, fixedCount: fixedRows.length,
+          variableTotal, variableCount: variableRows.length,
+          reimbursableTotal, reimbursableCount: reimbRows.length,
+          firstDate: first, lastDate: last,
+          spanDays, activeDays,
+          avgPerActiveDay: activeDays > 0 ? total / activeDays : 0,
         },
+        byCategory, bySource, byBudget, monthly,
         expenses,
-      }, 200, { total, limit, offset });
+      }, 200, { total: n, limit, offset });
     } catch (err) { next(err); }
   },
 };

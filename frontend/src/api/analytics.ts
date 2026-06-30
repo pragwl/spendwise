@@ -1,6 +1,10 @@
 import { client } from "./client";
 import { config } from "../config";
-import type { ApiResponse, AnalyticsSummary, MonthlyTrend, BudgetAnalytics, ReportResponse, DashboardData, ExpenseAnalysis, CategoryTrend } from "../types";
+import type { ApiResponse, AnalyticsSummary, MonthlyTrend, BudgetAnalytics, ReportResponse, ReportFilters, DashboardData, ExpenseAnalysis, CategoryTrend } from "../types";
+
+// Drop empty values so we only send the filters that are actually set.
+const clean = (o: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== "" && v !== null));
 
 export const analyticsApi = {
   getSummary: (startDate?: string, endDate?: string) =>
@@ -40,13 +44,17 @@ export const analyticsApi = {
       params: { categoryIds: categoryIds.join(",") },
     }),
 
-  // Report summary + a paginated page of rows for the table.
-  getReport: (budgetId: string, limit = 50, offset = 0) =>
+  // Report: server-computed summary + breakdowns over the full matching set,
+  // plus a paginated page of rows for the table.
+  getReport: (filters: ReportFilters, limit = 50, offset = 0) =>
     client.get<unknown, ApiResponse<ReportResponse>>("/analytics/report", {
-      params: { budgetId, limit, offset },
+      params: clean({ ...filters, limit, offset }),
     }),
 
-  // Direct download URL for the full CSV export (bypasses the page cap).
-  reportCsvUrl: (budgetId: string) =>
-    `${config.api.baseUrl}/analytics/report?budgetId=${encodeURIComponent(budgetId)}&format=csv`,
+  // Direct download URL for the full CSV export (bypasses the page cap),
+  // honouring the active report filters.
+  reportCsvUrl: (filters: ReportFilters) => {
+    const qs = new URLSearchParams(clean({ ...filters, format: "csv" }) as Record<string, string>);
+    return `${config.api.baseUrl}/analytics/report?${qs.toString()}`;
+  },
 };
