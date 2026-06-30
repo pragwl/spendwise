@@ -375,8 +375,12 @@ export const analyticsController = {
     } catch (err) { next(err); }
   },
 
-  // Dashboard: category breakdown, recent list, and monthly trend for the
-  // selected budget (or all active budgets), computed server-side.
+  // Dashboard: at-a-glance current state — period spend (this month / last 7
+  // days / today), the recent transaction list, and the standing pending-
+  // reimbursement total. Period spend + recent list are scoped to the selected
+  // budget (or all active budgets); pending reimbursements are global. All
+  // computed server-side. (Deeper analysis — category/source/monthly trends —
+  // lives on the Analytics screen.)
   async getDashboard(req: Request, res: Response, next: NextFunction) {
     try {
       const { budgetId } = req.query;
@@ -387,43 +391,45 @@ export const analyticsController = {
         const active = await prisma.budget.findMany({ where: { status: "active" }, select: { id: true } });
         budgetIds = active.map(b => b.id);
       }
+
+      // Pending reimbursements are a standing to-do, tracked globally.
+      const pendAgg = await prisma.reimbursement.aggregate({
+        where: { status: "pending" }, _sum: { amount: true }, _count: true,
+      });
+      const pendingReimbursement = { total: Number(pendAgg._sum.amount || 0), count: pendAgg._count };
+
+      const zeroPeriod = () => ({ spend: 0, count: 0 });
       if (budgetIds.length === 0) {
-        return sendSuccess(res, { categoryBreakdown: [], recentExpenses: [], monthly: [] });
+        return sendSuccess(res, {
+          recentExpenses: [],
+          stats: { month: zeroPeriod(), week: zeroPeriod(), today: zeroPeriod() },
+          pendingReimbursement,
+        });
       }
 
       const expenses = (await loadExpenses({ budgetId: { in: budgetIds } })) as unknown as LeanExpense[];
       const amt = (e: LeanExpense) => Number(e.amount);
 
-      // Category breakdown (sorted desc by total)
-      const catMap = new Map<string, { category: unknown; total: number; count: number }>();
+      // Time-window spend (calendar-safe UTC keys — matches how dates are stored).
+      const now = new Date();
+      const todayKey    = now.toISOString().slice(0, 10);
+      const monthKey    = todayKey.slice(0, 7);
+      const todayMsVal  = dayMs(todayKey);
+      const weekStartMs = todayMsVal - 6 * 86400000; // inclusive: last 7 days
+      const stats = { month: zeroPeriod(), week: zeroPeriod(), today: zeroPeriod() };
       for (const e of expenses) {
-        const ck = e.categoryId || "__none__";
-        const cx = catMap.get(ck);
-        if (cx) { cx.total += amt(e); cx.count++; }
-        else catMap.set(ck, { category: e.category || null, total: amt(e), count: 1 });
+        const k = dateKey(e.date); const a = amt(e); const ms = dayMs(k);
+        if (k.slice(0, 7) === monthKey)        { stats.month.spend += a; stats.month.count++; }
+        if (ms >= weekStartMs && ms <= todayMsVal) { stats.week.spend  += a; stats.week.count++; }
+        if (k === todayKey)                    { stats.today.spend += a; stats.today.count++; }
       }
-      const categoryBreakdown = [...catMap.values()].sort((a, b) => b.total - a.total);
-
-      // Monthly trend (last 6 months present in the data)
-      const monthlyMap = new Map<string, { spend: number; count: number }>();
-      for (const e of expenses) {
-        const k = dateKey(e.date).slice(0, 7);
-        const mx = monthlyMap.get(k);
-        if (mx) { mx.spend += amt(e); mx.count++; }
-        else monthlyMap.set(k, { spend: amt(e), count: 1 });
-      }
-      const monthly = [...monthlyMap.keys()].sort().slice(-MONTHS_BACK).map(k => {
-        const [year, monthNum] = k.split("-").map(Number);
-        const v = monthlyMap.get(k)!;
-        return { year, monthNum, spend: v.spend, count: v.count };
-      });
 
       // Five most recent transactions (full objects with category for display)
       const recentExpenses = [...expenses]
         .sort((a, b) => b.date.getTime() - a.date.getTime())
         .slice(0, 5);
 
-      return sendSuccess(res, { categoryBreakdown, recentExpenses, monthly });
+      return sendSuccess(res, { recentExpenses, stats, pendingReimbursement });
     } catch (err) { next(err); }
   },
 

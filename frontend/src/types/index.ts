@@ -267,8 +267,13 @@ export interface CategoryTrend {
   monthly:    { month: string; year: number; monthNum: number; totals: Record<string, number> }[];
 }
 
+export interface DashboardPeriod {
+  spend: number;
+  count: number;
+}
+
 export interface DashboardData {
-  categoryBreakdown: { category: Category | null; total: number; count: number }[];
-  recentExpenses:    Expense[];
-  monthly:           { year: number; monthNum: number; spend: number; count: number }[];
+  recentExpenses:       Expense[];
+  stats:                { month: DashboardPeriod; week: DashboardPeriod; today: DashboardPeriod };
+  pendingReimbursement: { total: number; count: number };
 }

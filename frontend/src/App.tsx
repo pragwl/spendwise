@@ -354,37 +354,14 @@ const NAV = [
 // ── DASHBOARD ─────────────────────────────────────────────────────────────
 function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
   const mobile = useMobile();
-  const { budgets, budgetsLoading, categories, enableCategories } = useData();
+  const { budgets, budgetsLoading } = useData();
   const [dash, setDash] = useState<DashboardData|null>(null);
   const [selBudgetId, setSelBudgetId] = useState("");
-
-  // Category-trend chart: user picks one or more categories; we plot each one's
-  // monthly spend as its own line. Data comes from /analytics/category-trend.
-  useEffect(() => { enableCategories(); }, [enableCategories]);
-  const [selCats, setSelCats] = useState<string[]>([]);
-  const [catTrend, setCatTrend] = useState<CategoryTrend|null>(null);
-  const catTrendInit = useRef(false);
-  // Seed with the first few categories once they load, for a useful default view.
-  useEffect(() => {
-    if (!catTrendInit.current && categories.length > 0) {
-      catTrendInit.current = true;
-      setSelCats(categories.slice(0, 3).map(c => c.id));
-    }
-  }, [categories]);
-  useEffect(() => {
-    if (selCats.length === 0) { setCatTrend(null); return; }
-    let live = true;
-    analyticsApi.getCategoryTrend(selCats)
-      .then(r => { if (live) setCatTrend(r.data); })
-      .catch(console.error);
-    return () => { live = false; };
-  }, [selCats]);
-  const toggleCat = (id: string) => setSelCats(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
   const active = budgets.filter(b => b.status === "active");
   const selectedBudget = selBudgetId ? active.find(b => b.id === selBudgetId) : null;
 
-  // Category breakdown, recent list, and monthly trend are computed server-side
+  // Period spend, recent list, and pending reimbursements — computed server-side
   // (scoped to the selected budget, or all active budgets by default).
   useEffect(() => {
     if (budgetsLoading) return; // wait for budgets to resolve — avoids a duplicate empty-state fetch
@@ -411,19 +388,17 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
 
   const overviewTone = overBudget > 0 ? "danger" : alertedTenders.length > 0 ? "warn" : h.tone;
 
-  // Category breakdown, recent list, and monthly trend — computed server-side
-  const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const cats = dash?.categoryBreakdown ?? [];
   const filteredRecent = dash?.recentExpenses ?? [];
-  const trendData = (dash?.monthly ?? []).map(m => ({ month: `${MONTHS[m.monthNum]} '${String(m.year).slice(2)}`, spend: m.spend }));
+  const scopeLabel = selectedBudget ? selectedBudget.name : "all active budgets";
 
-  // Reshape the category trend into recharts rows: one row per month with a
-  // keyed value per selected category.
-  const catTrendRows = (catTrend?.monthly ?? []).map(m => {
-    const row: Record<string, string|number> = { month: `${MONTHS[m.monthNum]} '${String(m.year).slice(2)}` };
-    (catTrend?.categories ?? []).forEach(c => { row[c.name] = m.totals[c.id] || 0; });
-    return row;
-  });
+  // At-a-glance current-period tiles (figures computed server-side).
+  const periodTiles: { label:string; value:string; sub:string; tone:string; onClick?:()=>void }[] = [
+    { label:"Spent this month", value:fmt(dash?.stats.month.spend ?? 0), sub:`${dash?.stats.month.count ?? 0} transaction${(dash?.stats.month.count ?? 0)===1?"":"s"}`, tone:"primary" },
+    { label:"Last 7 days",      value:fmt(dash?.stats.week.spend  ?? 0), sub:`${dash?.stats.week.count  ?? 0} transaction${(dash?.stats.week.count  ?? 0)===1?"":"s"}`, tone:"sky" },
+    { label:"Today",            value:fmt(dash?.stats.today.spend ?? 0), sub:`${dash?.stats.today.count ?? 0} transaction${(dash?.stats.today.count ?? 0)===1?"":"s"}`, tone:"sage" },
+    { label:"Pending reimbursements", value:fmt(dash?.pendingReimbursement.total ?? 0), sub:`${dash?.pendingReimbursement.count ?? 0} to claim`,
+      tone:(dash?.pendingReimbursement.total ?? 0)>0?"warn":"sage", onClick:()=>goTo("reimbursements") },
+  ];
 
   if (budgetsLoading) return <Spinner />;
 
@@ -439,20 +414,7 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
       </div>
     </div>
 
-    {/* Threshold alerts */}
-    {alertedTenders.length > 0 && (
-      <div style={{ marginBottom:16, padding:"12px 16px", borderRadius:14, background:T.warnS, border:`1px solid ${T.warn}55` }}>
-        <p style={{ fontSize:13, fontWeight:700, color:T.warn, marginBottom:6 }}>⚠️ Tender threshold alerts</p>
-        {alertedTenders.map(ta => (
-          <div key={`${ta.budgetName}-${ta.splitTenderId}`} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4, flexWrap:"wrap" }}>
-            <span style={{ fontSize:12, color:T.warn, fontWeight:600 }}>· {ta.splitTenderName} <span style={{ fontWeight:500, color:T.warn, opacity:.8 }}>in {ta.budgetName}</span></span>
-            <span style={{ fontSize:11, color:T.warn }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)} ({Math.round((ta.spentAmount/ta.allocatedAmount)*100)}%) — at {ta.threshold}%</span>
-          </div>
-        ))}
-      </div>
-    )}
-
-    {/* Overview card */}
+    {/* Overview card — how much budget is left (the headline) */}
     <Card style={{ marginBottom:18, padding:"26px 28px", position:"relative", overflow:"hidden" }}>
       <div style={{ position:"absolute", right:-30, top:-30, width:180, height:180, borderRadius:"50%", background:toneC[h.tone], opacity:.06 }} />
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:8 }}>
@@ -488,6 +450,71 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
         <Progress pct={pct} tone={overviewTone} h={11} />
       </div>
     </Card>
+
+    {/* Threshold alerts */}
+    {alertedTenders.length > 0 && (
+      <div style={{ marginBottom:18, padding:"12px 16px", borderRadius:14, background:T.warnS, border:`1px solid ${T.warn}55` }}>
+        <p style={{ fontSize:13, fontWeight:700, color:T.warn, marginBottom:6 }}>⚠️ Tender threshold alerts</p>
+        {alertedTenders.map(ta => (
+          <div key={`${ta.budgetName}-${ta.splitTenderId}`} style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4, flexWrap:"wrap" }}>
+            <span style={{ fontSize:12, color:T.warn, fontWeight:600 }}>· {ta.splitTenderName} <span style={{ fontWeight:500, color:T.warn, opacity:.8 }}>in {ta.budgetName}</span></span>
+            <span style={{ fontSize:11, color:T.warn }}>{fmt(ta.spentAmount)} / {fmt(ta.allocatedAmount)} ({Math.round((ta.spentAmount/ta.allocatedAmount)*100)}%) — at {ta.threshold}%</span>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* At a glance — current-period spend + pending reimbursements (scoped to {scopeLabel}) */}
+    <div style={{ marginBottom:18 }}>
+      <p style={{ fontSize:11, fontWeight:700, color:T.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10 }}>At a glance · {scopeLabel}</p>
+      <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fit,minmax(${mobile?"150px":"200px"},1fr))`, gap:13 }}>
+        {periodTiles.map(t=>(
+          <div key={t.label} onClick={t.onClick}
+            style={{ borderRadius:16, border:`1px solid ${T.line}`, padding:"14px 16px", background:T.paper, cursor:t.onClick?"pointer":"default" }}>
+            <p style={{ fontSize:11, color:T.muted, display:"flex", alignItems:"center", gap:4 }}>{t.label}{t.onClick && <span style={{ color:T.primary, fontWeight:700 }}>→</span>}</p>
+            <p style={{ fontWeight:800, fontSize:22, color:toneC[t.tone], marginTop:4 }}>{t.value}</p>
+            <p style={{ fontSize:10, color:T.faint, marginTop:3 }}>{t.sub}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Your budgets — quick health of each active budget; tap one to focus the dashboard on it */}
+    {active.length > 0 && (
+      <Card style={{ marginBottom:18 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+          <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Your budgets<KpiInfo text="A quick health check of each active budget. Tap one to focus the dashboard on it." /></span>
+          <button onClick={()=>goTo("budgets")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>Manage →</button>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:`repeat(auto-fill,minmax(${mobile?"100%":"230px"},1fr))`, gap:12 }}>
+          {active.map(b=>{
+            const amt   = Number(b.amount || 0);
+            const used  = Number(b.usedAmount || 0);
+            const bpct  = amt ? (used/amt)*100 : 0;
+            const bover = Math.max(0, used - amt);
+            const bleft = Math.max(0, amt - used);
+            const bTone = bover > 0 ? "danger" : health(bpct).tone;
+            const sel   = selBudgetId === b.id;
+            return (
+              <button key={b.id} onClick={()=>setSelBudgetId(sel ? "" : b.id)}
+                style={{ textAlign:"left", cursor:"pointer", fontFamily:"inherit", borderRadius:14, padding:"12px 14px",
+                         background:sel?(b.color||T.primary)+"12":T.cream, border:`1.5px solid ${sel?(b.color||T.primary):T.line}` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
+                  <span style={{ width:9, height:9, borderRadius:99, background:b.color||T.primary, flexShrink:0 }} />
+                  <span style={{ fontSize:13, fontWeight:700, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>{b.name}</span>
+                  <Badge tone={bTone}>{Math.round(bpct)}%</Badge>
+                </div>
+                <Progress pct={bpct} tone={bTone} h={6} />
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginTop:7 }}>
+                  <span style={{ fontSize:13, fontWeight:800, color:toneC[bTone] }}>{bover > 0 ? `+${fmt(bover)} over` : `${fmt(bleft)} left`}</span>
+                  <span style={{ fontSize:10, color:T.faint }}>{fmt(used)} / {fmt(amt)}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+    )}
 
     {/* Selected budget tender breakdown */}
     {selectedBudget && selectedBudget.tenderAnalytics && selectedBudget.tenderAnalytics.length > 0 && (
@@ -534,116 +561,26 @@ function Dashboard({ onAdd, goTo }: { onAdd:()=>void; goTo:(r:string)=>void }) {
       </Card>
     )}
 
-    {/* Pie + Recent */}
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:18, marginBottom:18 }}>
-      {cats.length>0 && (
-        <Card>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14 }}>
-            <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>By category<KpiInfo text="How your spending across the selected budget(s) is divided between expense categories." /></span>
-            <button onClick={()=>goTo("analytics")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>Details →</button>
-          </div>
-          <ResponsiveContainer width="100%" height={160}>
-            <PieChart>
-              <Pie data={cats.map(c=>({name:c.category?.name||"Other",value:c.total}))}
-                cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={3}>
-                {cats.map((_c,i)=>(
-                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(v:unknown)=>fmt(Number(v))} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 14px", marginTop:10 }}>
-            {cats.slice(0,8).map((c,i)=>(
-              <div key={i} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                <div style={{ width:8, height:8, borderRadius:99, background:CHART_PALETTE[i%CHART_PALETTE.length], flexShrink:0 }} />
-                <span style={{ fontSize:11, color:T.muted }}>{c.category?.name||"Other"}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-      <Card>
-        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14 }}>
-          <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Recent expenses{selBudgetId ? " · filtered" : ""}<KpiInfo text="Your latest recorded transactions, sorted by most recent date." /></span>
-          <button onClick={()=>goTo("expenses")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>All →</button>
-        </div>
-        {filteredRecent.length === 0
-          ? <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>No recent expenses.</p>
-          : filteredRecent.map(e=><div key={e.id} style={{ display:"flex", alignItems:"center", gap:11, padding:"9px 0", borderBottom:`1px solid ${T.line}` }}>
-            <div style={{ width:36, height:36, borderRadius:11, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:18 }}>{e.category?.icon||"💡"}</div>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
-                <p style={{ fontSize:13, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
-                <NoteTip notes={e.notes} />
-              </div>
-              <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
-            </div>
-            <span style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</span>
-          </div>)
-        }
-      </Card>
-    </div>
-
-    {trendData.length>0 && <Card>
-      <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center", marginBottom:14 }}>Monthly trend<KpiInfo text="How your spending has changed month by month over the past 6 months." /></span>
-      <ResponsiveContainer width="100%" height={mobile?140:180}>
-        <AreaChart data={trendData}>
-          <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={T.primary} stopOpacity={.2}/><stop offset="95%" stopColor={T.primary} stopOpacity={0}/></linearGradient></defs>
-          <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-          <XAxis dataKey="month" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
-          <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} />
-          <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
-          <Area type="monotone" dataKey="spend" name="Spent" stroke={T.primary} strokeWidth={2.5} fill="url(#g)" />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Card>}
-
-    {/* Category spend by month — pick one or more categories to compare. */}
-    <Card style={{ marginTop:18 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8, marginBottom:14 }}>
-        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Category spend by month<KpiInfo text="Monthly spend for each category you select, so you can compare how categories trend over time." /></span>
+    {/* Recent expenses — quick access to your latest transactions */}
+    <Card>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14 }}>
+        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Recent expenses{selBudgetId ? " · filtered" : ""}<KpiInfo text="Your latest recorded transactions, sorted by most recent date." /></span>
+        <button onClick={()=>goTo("expenses")} style={{ fontSize:12, fontWeight:700, color:T.primary, background:"none", border:"none", cursor:"pointer" }}>All →</button>
       </div>
-      {categories.length === 0 ? (
-        <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Add categories to compare their monthly spend.</p>
-      ) : (
-        <>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
-            {categories.map(c => {
-              const on = selCats.includes(c.id);
-              // Match each selected chip to its line colour (same palette + order).
-              const idx = (catTrend?.categories ?? []).findIndex(t => t.id === c.id);
-              const col = on && idx >= 0 ? TREND_COLORS[idx % TREND_COLORS.length] : (c.color || T.primary);
-              return (
-                <button key={c.id} onClick={()=>toggleCat(c.id)}
-                  style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:20, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
-                           border:`1.5px solid ${on?col:T.line}`, background:on?col+"22":"transparent", color:on?col:T.muted }}>
-                  <span>{c.icon||"📁"}</span>{c.name}
-                </button>
-              );
-            })}
+      {filteredRecent.length === 0
+        ? <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>No recent expenses.</p>
+        : filteredRecent.map(e=><div key={e.id} style={{ display:"flex", alignItems:"center", gap:11, padding:"9px 0", borderBottom:`1px solid ${T.line}` }}>
+          <div style={{ width:36, height:36, borderRadius:11, background:(e.category?.color||T.muted)+"22", display:"grid", placeItems:"center", fontSize:18 }}>{e.category?.icon||"💡"}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0 }}>
+              <p style={{ fontSize:13, fontWeight:600, color:T.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.title}</p>
+              <NoteTip notes={e.notes} />
+            </div>
+            <p style={{ fontSize:11, color:T.faint }}>{getSafeDate(e.date).toLocaleDateString("en-IN",{day:"numeric",month:"short"})}</p>
           </div>
-          {selCats.length === 0 ? (
-            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Select one or more categories above to see their monthly trend.</p>
-          ) : catTrendRows.length === 0 ? (
-            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>No spending recorded for the selected categories.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={mobile?180:240}>
-              <LineChart data={catTrendRows}>
-                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-                <XAxis dataKey="month" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
-                <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} />
-                <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
-                <Legend wrapperStyle={{fontSize:12}} />
-                {(catTrend?.categories ?? []).map((c,i) => {
-                  const col = TREND_COLORS[i % TREND_COLORS.length];
-                  return <Line key={c.id} type="monotone" dataKey={c.name} stroke={col} strokeWidth={3} dot={{r:3,fill:col}} activeDot={{r:5}} />;
-                })}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </>
-      )}
+          <span style={{ fontSize:13, fontWeight:700, color:T.ink }}>{fmt(Number(e.amount))}</span>
+        </div>)
+      }
     </Card>
   </div>;
 }
@@ -2080,12 +2017,34 @@ function SplitTendersScreen() {
 // ── ANALYTICS SCREEN ──────────────────────────────────────────────────────
 function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const mobile = useMobile();
-  const { budgets } = useData();
+  const { budgets, categories, enableCategories } = useData();
   const [error,   setError]           = useState("");
   const [selBudgets, setSelBudgets]   = useState<string[]>([]);
   const [data, setData]               = useState<BudgetAnalytics|null>(null);
   const [expLoading, setExpLoading]   = useState(false);
   const didInit = useRef(false);
+
+  // Category-trend chart: user picks one or more categories; we plot each one's
+  // monthly spend as its own line. Data comes from /analytics/category-trend.
+  useEffect(() => { enableCategories(); }, [enableCategories]);
+  const [selCats, setSelCats] = useState<string[]>([]);
+  const [catTrend, setCatTrend] = useState<CategoryTrend|null>(null);
+  const catTrendInit = useRef(false);
+  useEffect(() => {
+    if (!catTrendInit.current && categories.length > 0) {
+      catTrendInit.current = true;
+      setSelCats(categories.slice(0, 3).map(c => c.id));
+    }
+  }, [categories]);
+  useEffect(() => {
+    if (selCats.length === 0) { setCatTrend(null); return; }
+    let live = true;
+    analyticsApi.getCategoryTrend(selCats)
+      .then(r => { if (live) setCatTrend(r.data); })
+      .catch(console.error);
+    return () => { live = false; };
+  }, [selCats]);
+  const toggleCat = (id: string) => setSelCats(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
   // All budgets are selectable here regardless of status — analytics over a
   // paused or completed budget is just as useful. Grouped by status so the
@@ -2142,6 +2101,14 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
   const variableCount  = data?.variableCount     ?? 0;
 
   const monthly = (data?.monthly ?? []).map(m => ({ ...m, month: MONTHS[m.monthNum] }));
+
+  // Reshape the category trend into recharts rows: one row per month with a
+  // keyed value per selected category.
+  const catTrendRows = (catTrend?.monthly ?? []).map(m => {
+    const row: Record<string, string|number> = { month: `${MONTHS[m.monthNum]} '${String(m.year).slice(2)}` };
+    (catTrend?.categories ?? []).forEach(c => { row[c.name] = m.totals[c.id] || 0; });
+    return row;
+  });
 
   const dowData = DOW.map((day,i)=>{
     const d = data?.dow.find(x=>x.dayIndex===i);
@@ -2630,6 +2597,54 @@ function AnalyticsScreen({ onDrillTo }: { onDrillTo?:(f:NavFilters)=>void }) {
         </Card>
       )}
     </div>
+
+    {/* Category spend by month — pick one or more categories to compare how they
+        trend over time (across all expenses, independent of the budget filter). */}
+    <Card style={{ marginTop:18 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8, marginBottom:14 }}>
+        <span style={{ fontWeight:700, fontSize:16, color:T.ink, display:"flex", alignItems:"center" }}>Category spend by month<KpiInfo text="Monthly spend for each category you select, so you can compare how categories trend over time. Spans all recorded expenses, regardless of the budget filter above." /></span>
+      </div>
+      {categories.length === 0 ? (
+        <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Add categories to compare their monthly spend.</p>
+      ) : (
+        <>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+            {categories.map(c => {
+              const on = selCats.includes(c.id);
+              // Match each selected chip to its line colour (same palette + order).
+              const idx = (catTrend?.categories ?? []).findIndex(t => t.id === c.id);
+              const col = on && idx >= 0 ? TREND_COLORS[idx % TREND_COLORS.length] : (c.color || T.primary);
+              return (
+                <button key={c.id} onClick={()=>toggleCat(c.id)}
+                  style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:20, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600,
+                           border:`1.5px solid ${on?col:T.line}`, background:on?col+"22":"transparent", color:on?col:T.muted }}>
+                  <span>{c.icon||"📁"}</span>{c.name}
+                </button>
+              );
+            })}
+          </div>
+          {selCats.length === 0 ? (
+            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>Select one or more categories above to see their monthly trend.</p>
+          ) : catTrendRows.length === 0 ? (
+            <p style={{ fontSize:13, color:T.muted, padding:"8px 0" }}>No spending recorded for the selected categories.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={mobile?180:240}>
+              <LineChart data={catTrendRows}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+                <XAxis dataKey="month" tick={{fontSize:11,fill:T.muted}} axisLine={false} tickLine={false} />
+                <YAxis tick={{fontSize:10,fill:T.muted}} axisLine={false} tickLine={false} tickFormatter={fmtS} />
+                <Tooltip formatter={(v:unknown)=>fmt(Number(v))} contentStyle={{borderRadius:12,border:"none",fontSize:12}} />
+                <Legend wrapperStyle={{fontSize:12}} />
+                {(catTrend?.categories ?? []).map((c,i) => {
+                  const col = TREND_COLORS[i % TREND_COLORS.length];
+                  return <Line key={c.id} type="monotone" dataKey={c.name} stroke={col} strokeWidth={3} dot={{r:3,fill:col}} activeDot={{r:5}} />;
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </>
+      )}
+    </Card>
   </div>;
 }
 
